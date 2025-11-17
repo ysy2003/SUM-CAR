@@ -187,19 +187,6 @@ class KVMemoryLayer(nn.Module):
         """
         return self.acc_counts.clone()
     
-    def top_slots(self, k: int) -> List[int]:
-        """
-        获取访问次数最多的 top-k 槽位
-        
-        参数:
-            k: 返回的槽位数量
-        
-        返回:
-            访问次数最多的 k 个槽位 ID 列表
-        """
-        _, indices = torch.topk(self.acc_counts, k=min(k, self.num_slots))
-        return indices.tolist()
-    
     def enable_access_logging(self):
         """启用访问统计"""
         self._log_access = True
@@ -215,20 +202,6 @@ class KVMemoryLayer(nn.Module):
     
     def unfreeze_all(self):
         """解冻所有参数（参与训练）"""
-        self.keys.requires_grad = True
-        self.vals.requires_grad = True
-    
-    def unfreeze_slots(self, slot_ids: List[int]):
-        """
-        解冻指定槽位用于训练
-        
-        参数:
-            slot_ids: 要解冻的槽位 ID 列表
-        
-        注意：这会设置 trainable_mask，需要配合 set_trainable_slots 使用
-        """
-        self.set_trainable_slots(slot_ids)
-        # 确保参数可训练
         self.keys.requires_grad = True
         self.vals.requires_grad = True
     
