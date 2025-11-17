@@ -1,0 +1,13 @@
+base_model: gpt2
+mem:
+num_slots: 65536
+k_top: 32
+alpha: 1.0
+inference:
+max_new_tokens: 128
+temperature: 0.0
+top_p: 1.0
+batch_size: 4
+paths:
+merged_dir: out/merged
+out_dir: out
