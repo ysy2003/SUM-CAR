@@ -1,23 +1,75 @@
-# Python 虚拟环境
+# Python
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 nlp/
 venv/
 env/
 ENV/
-*.pyc
-__pycache__/
+.venv/
 
-# tinker-cookbook (克隆的仓库，不上传)
+# SUM-CAR generated files
+data/
+checkpoints/
+visualizations/
+demo_output/
+*.pt
+*.pth
+*.ckpt
+
+# Datasets cache
+.cache/
+datasets_cache/
+
+# External repos
 tinker-cookbook/
 
-# 环境变量
+# Environment
 .env
+.env.local
 
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+logs/
+*.log
+
+# Temporary
+tmp/
+temp/
 
 # Python
 *.py[cod]

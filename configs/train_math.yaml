@@ -1,0 +1,15 @@
+base_model: gpt2
+mem:
+  num_slots: 65536
+  k_top: 32
+  alpha: 1.0
+train:
+  epochs: 1
+  lr: 5.0e-4
+  batch_size: 4
+  max_length: 512
+  probe_steps: 1000
+  top_t: 2048
+  save_dir: out/math
+  seed: 42
+  dataset: gsm8k
