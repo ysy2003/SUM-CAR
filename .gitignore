@@ -6,6 +6,9 @@ ENV/
 *.pyc
 __pycache__/
 
+# tinker-cookbook (克隆的仓库，不上传)
+tinker-cookbook/
+
 # 环境变量
 .env
 
