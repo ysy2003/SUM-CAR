@@ -28,7 +28,7 @@ ENV/
 .venv/
 
 # SUM-CAR generated files
-data/
+# data/  # Commented out - we need src/sumcar/data/ module
 checkpoints/
 visualizations/
 demo_output/
