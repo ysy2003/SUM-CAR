@@ -1,4 +1,4 @@
-base_model: meta-llama/Meta-Llama-3-8B-Instruct
+base_model: meta-llama/Llama-3.1-8B
 mem:
   num_slots: 65536
   k_top: 32
