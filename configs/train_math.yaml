@@ -1,13 +1,24 @@
-base_model: meta-llama/Llama-3.2-1B
+base_model: meta-llama/Meta-Llama-3-8B-Instruct
 mem:
   num_slots: 65536
   k_top: 32
   alpha: 1.0
+  tau: 10.0
+  use_gate: true
+  normalize_retrieval: true
 train:
-  epochs: 1
+  epochs: 3
   lr: 5.0e-4
-  batch_size: 4
+  lr_kv: 1.0e-3
+  lr_gate: 1.0e-4
+  batch_size: 8
   max_length: 512
+  probe_steps: 1000
+  top_t: 2048
+  refresh_every: 200
+  save_dir: out/math
+  seed: 42
+  dataset: gsm8k
   probe_steps: 1000
   top_t: 2048
   save_dir: out/math

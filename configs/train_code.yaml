@@ -1,13 +1,24 @@
-base_model: meta-llama/Llama-3.2-1B
+base_model: meta-llama/Meta-Llama-3-8B-Instruct
 mem:
-num_slots: 65536
-k_top: 32
-alpha: 1.0
+  num_slots: 65536
+  k_top: 32
+  alpha: 1.0
+  tau: 10.0
+  use_gate: true
+  normalize_retrieval: true
 train:
-epochs: 1
-lr: 5.0e-4
-batch_size: 2
-max_length: 768
+  epochs: 3
+  lr: 5.0e-4
+  lr_kv: 1.0e-3
+  lr_gate: 1.0e-4
+  batch_size: 8
+  max_length: 1024
+  probe_steps: 1000
+  top_t: 4096
+  refresh_every: 200
+  save_dir: out/code
+  seed: 42
+  dataset: codexglue_refine
 probe_steps: 1000
 top_t: 4096
 save_dir: out/code

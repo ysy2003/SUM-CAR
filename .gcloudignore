@@ -1,0 +1,47 @@
+# Git files (不传 git 历史)
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments (不上传本地环境)
+nlp/
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Output and cache
+out/
+*.egg-info/
+dist/
+build/
+
+# Large data files
+data/*.jsonl
+data/*.json
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Logs
+*.log
+
+# Tinker cookbook (太大，在 TPU VM 上重新安装)
+tinker-cookbook/

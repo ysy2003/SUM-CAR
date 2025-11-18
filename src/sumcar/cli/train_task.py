@@ -63,22 +63,32 @@ def to_batch_datums(msg_batch, renderer, max_len=2048):
     return batch
 
 
-def main(task: str, config: str, use_tinker: bool = True, lora_rank: int = 32):
-    """Train a per-task sparse-memory skill patch using Tinker + LoRA.
+def main(task: str = None, config: str = None, config_path: str = None, use_tinker: bool = False, lora_rank: int = 32, use_xla: bool = False):
+    """Train a per-task sparse-memory skill patch using Tinker + LoRA or local KV training.
 
     Args:
         task: short name for this patch (e.g., 'math' / 'code' / 'finqa').
         config: path to YAML config (contains base_model, mem, train).
+        config_path: alternative name for config parameter
         use_tinker: if True, use Tinker + LoRA; if False, use original local training.
         lora_rank: LoRA rank for Tinker training (default 32).
+        use_xla: if True, use XLA/TPU training (for non-Tinker mode)
     Outputs:
         out/patch_{task}.json         — serialized patch (LoRA info or KV memory)
         out/patch_{task}_meta.json    — metadata (task, stats)
     """
+    # 处理参数兼容性
+    if config_path and not config:
+        config = config_path
+    
     cfg = yaml.safe_load(open(config, 'r'))
     base_model = cfg['base_model']
     mem_cfg = cfg['mem']
     train_cfg = cfg['train']
+    
+    # 从 config 推断 task（如果未提供）
+    if not task:
+        task = train_cfg.get('dataset', 'unknown').split('_')[0]
 
     set_all(train_cfg.get('seed', 42))
     logger = Logger(f"[train:{task}]")
@@ -244,8 +254,8 @@ def main(task: str, config: str, use_tinker: bool = True, lora_rank: int = 32):
             logger.log(f'Checkpoint downloaded to: {checkpoint_path}')
     
     else:
-        # ============ 原始本地训练路径 ============
-        logger.log('Using original local training mode')
+        # ============ 原始本地训练路径（支持 XLA/TPU）============
+        logger.log(f'Using original local KV memory training mode (XLA={use_xla})')
         
         # 2) Tokenizer & collator
         tok = AutoTokenizer.from_pretrained(base_model)
@@ -254,28 +264,84 @@ def main(task: str, config: str, use_tinker: bool = True, lora_rank: int = 32):
         collate = CLMCollator(tok, max_length=train_cfg['max_length'])
         dl = DataLoader(ds, batch_size=train_cfg['batch_size'], shuffle=True, collate_fn=collate)
 
-        # 3) Build trainer (model + memory)
-        ft = SparseFinetuner(base_model, mem_cfg, train_cfg, tokenizer=tok, logger=logger)
+        # 3) Build trainer (model + memory) with XLA support
+        ft = SparseFinetuner(base_model, mem_cfg, train_cfg, tokenizer=tok, logger=logger, use_xla=use_xla)
 
         # 4) Phase I: probe slot access (all frozen, just logging)
         ft.mem.freeze_all()
-        ft.probe(dl, steps=train_cfg['probe_steps'])
+        probe_steps = train_cfg.get('probe_steps', 1000)
+        logger.log(f'Phase I: Probing {probe_steps} steps...')
+        ft.probe(dl, steps=probe_steps)
 
         # 5) Phase II: choose top-t most-accessed slots, unfreeze and finetune
         top_t = train_cfg['top_t']
         slot_ids = ft.mem.top_slots(top_t)
         logger.log('unfreezing top-t slots:', len(slot_ids))
         ft.mem.unfreeze_slots(slot_ids)
-        ft.train(dl, epochs=train_cfg['epochs'])
+        
+        # Train with refresh_every parameter
+        refresh_every = train_cfg.get('refresh_every', 200)
+        logger.log(f'Phase II: Training {train_cfg["epochs"]} epochs with refresh_every={refresh_every}...')
+        ft.train(dl, epochs=train_cfg['epochs'], refresh_every=refresh_every)
 
         # 6) Export patch
         save_dir = train_cfg['save_dir']
         patch = ft.build_patch(task, top_t, save_dir)
         ensure_dir('out')
         dump_json(patch, os.path.join('out', f'patch_{task}.json'))
-        dump_json({'task': task, 'slot_ids': slot_ids, 'top_t': top_t}, os.path.join('out', f'patch_{task}_meta.json'))
+        
+        # 保存元数据（包含 specificity 信息）
+        meta = {
+            'task': task,
+            'slot_ids': slot_ids,
+            'top_t': top_t,
+            'num_slots': mem_cfg['num_slots'],
+            'use_xla': use_xla
+        }
+        dump_json(meta, os.path.join('out', f'patch_{task}_meta.json'))
         logger.log('patch saved to out/', f'patch_{task}.json')
 
+
+def _xla_worker(rank, args):
+    """XLA worker function for TPU multi-processing"""
+    import torch_xla.core.xla_model as xm
+    
+    # 设置随机种子
+    xm.set_rng_state(42 + rank)
+    
+    # 只在主进程打印
+    if xm.is_master_ordinal():
+        print(f"[XLA Worker {rank}] Starting training on TPU...")
+    
+    # 调用主训练函数
+    main(**args)
+
+
+def train_with_xla(config: str, task: str = None, num_processes: int = 8):
+    """
+    使用 XLA 多进程在 TPU 上训练
+    
+    Args:
+        config: 配置文件路径
+        task: 任务名称（可选，从配置推断）
+        num_processes: TPU 核心数（默认 8）
+    """
+    try:
+        import torch_xla.distributed.xla_multiprocessing as xmp
+    except ImportError:
+        raise ImportError("torch_xla not installed. Install with: pip install torch-xla")
+    
+    args = {
+        'config': config,
+        'task': task,
+        'use_tinker': False,
+        'use_xla': True
+    }
+    
+    # 启动多进程训练
+    xmp.spawn(_xla_worker, args=(args,), nprocs=num_processes)
+
+
 if __name__ == '__main__':
-    fire.Fire(main)
+    fire.Fire({'train': main, 'train_xla': train_with_xla})
 

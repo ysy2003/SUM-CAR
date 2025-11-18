@@ -1,0 +1,7 @@
+model:
+  name: "RedHatAI/gemma-3-27b-it-quantized.w8a8"
+  api_base: "http://127.0.0.1:8000/v1"
+  api_key: "EMPTY"
+
+task:
+  prompt: "Tell me a short fun fact about large language models."

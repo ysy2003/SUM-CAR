@@ -1,13 +1,4 @@
-# SUM-CAR: Memory-Enhanced FFN with Task-Specific Adaptation
-
-# SUM-CAR (Sparse Union Merge with Conflict-Aware Remapping)
-
-
-This repo contains a minimal but complete scaffold to reproduce your proposal:
-- Per-task sparse memory finetuning to produce **skill patches** for Math (GSM8K), Code (CodeXGLUE/MBPP), Finance (FinQA RC subset)
-- **SUM-CAR** merging with conflict-aware slot **remapping** instead of parameter averaging
-- Single-task + Composite evaluation with four metrics: **Retention**, **Joint Accuracy**, **Slot Growth per Task**, **Reversibility**
-
+# SUM-CAR
 
 ## Quickstart
 ```bash
