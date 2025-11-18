@@ -26,7 +26,10 @@ class KVMemoryLayer(nn.Module):
         num_slots: int = 200000,
         k_top: int = 32,
         alpha: float = 1.0,
-        log_access: bool = True
+        log_access: bool = True,
+        tau: float = 10.0,
+        use_gate: bool = True,
+        normalize_retrieval: bool = True
     ):
         """
         参数:
@@ -35,6 +38,9 @@ class KVMemoryLayer(nn.Module):
             k_top: Top-k 检索数量
             alpha: 输出缩放因子
             log_access: 是否记录访问统计
+            tau: 温度参数（用于 softmax）
+            use_gate: 是否使用门控机制
+            normalize_retrieval: 是否归一化 query 和 key
         """
         super().__init__()
         
@@ -43,43 +49,76 @@ class KVMemoryLayer(nn.Module):
         self.k_top = k_top
         self.alpha = alpha
         self._log_access = log_access
+        self.tau = tau
+        self.normalize_retrieval = normalize_retrieval
         
         # Keys 和 Values
         self.keys = nn.Parameter(torch.randn(num_slots, d_model) * 0.02)
         self.vals = nn.Parameter(torch.zeros(num_slots, d_model))
+        
+        # Query 投影（用于更好的检索）
+        self.W_q = nn.Linear(d_model, d_model, bias=False)
+        nn.init.eye_(self.W_q.weight)  # 初始化为单位矩阵
+        
+        # 门控机制（标量门控）
+        self.use_gate = use_gate
+        if use_gate:
+            self.gate = nn.Linear(d_model, 1, bias=True)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.constant_(self.gate.bias, -2.0)  # 初始门控很小
         
         # 访问计数（不参与梯度）
         self.register_buffer('acc_counts', torch.zeros(num_slots, dtype=torch.long))
         
         # 可训练掩码（用于稀疏训练）
         self.register_buffer('_trainable_mask', torch.zeros(num_slots, dtype=torch.bool))
+        
+        # 最近命中的槽位（用于特异度追踪）
+        self._last_hits = None
     
-    def forward(self, x):
+    def forward(self, x, record_hits: bool = True):
         """
         前向传播
         
         参数:
             x: [B, L, D] 输入张量
+            record_hits: 是否记录命中（用于特异度追踪）
         
         返回:
             [B, L, D] 输出张量
         """
         # x: [B, L, D]
         B, L, D = x.shape
-        q = x.reshape(B * L, D)  # [BL, D]
+        
+        # Query 投影
+        q = self.W_q(x)  # [B, L, D]
+        
+        # 归一化（如果启用）
+        if self.normalize_retrieval:
+            q = F.normalize(q, dim=-1)
+            keys = F.normalize(self.keys, dim=-1)
+        else:
+            keys = self.keys
+        
+        # 计算相似度 [B, L, M]
+        scores = torch.einsum('bld,md->blm', q, keys) / (D ** 0.5)
         
         # Top-k 检索
-        scores = torch.matmul(q, self.keys.t())  # [BL, S]
-        topv, topi = torch.topk(scores, k=min(self.k_top, self.num_slots), dim=-1)
+        topv, topi = torch.topk(scores, k=min(self.k_top, self.num_slots), dim=-1)  # [B, L, K]
         
-        # 注意力权重
-        attn = F.softmax(topv, dim=-1)  # [BL, K]
+        # 注意力权重（带温度）
+        attn = F.softmax(topv / self.tau, dim=-1)  # [B, L, K]
         
         # 获取选中的 values
-        sel_vals = self.vals[topi]  # [BL, K, D]
+        sel_vals = self.vals[topi]  # [B, L, K, D]
         
         # 加权求和
-        out = torch.sum(attn.unsqueeze(-1) * sel_vals, dim=1)  # [BL, D]
+        out = torch.einsum('blk,blkd->bld', attn, sel_vals)  # [B, L, D]
+        
+        # 门控融合
+        if self.use_gate:
+            g = torch.sigmoid(self.gate(x))  # [B, L, 1]
+            out = g * out
         
         # 记录访问统计
         if self._log_access:
@@ -88,7 +127,11 @@ class KVMemoryLayer(nn.Module):
                 binc = torch.bincount(flat, minlength=self.num_slots)
                 self.acc_counts += binc.to(self.acc_counts.device)
         
-        out = out.reshape(B, L, D)
+        # 记录最近命中（用于特异度追踪）
+        if self.training and record_hits:
+            with torch.no_grad():
+                self._last_hits = torch.unique(topi.reshape(-1))
+        
         return self.alpha * out
     
     def get_patch(self, slot_ids: List[int]) -> Dict:
@@ -187,19 +230,6 @@ class KVMemoryLayer(nn.Module):
         """
         return self.acc_counts.clone()
     
-    def top_slots(self, k: int) -> List[int]:
-        """
-        获取访问次数最多的 top-k 槽位
-        
-        参数:
-            k: 返回的槽位数量
-        
-        返回:
-            访问次数最多的 k 个槽位 ID 列表
-        """
-        _, indices = torch.topk(self.acc_counts, k=min(k, self.num_slots))
-        return indices.tolist()
-    
     def enable_access_logging(self):
         """启用访问统计"""
         self._log_access = True
@@ -208,37 +238,29 @@ class KVMemoryLayer(nn.Module):
         """禁用访问统计"""
         self._log_access = False
     
-    def freeze_all(self):
-        """冻结所有参数（不参与训练）"""
-        self.keys.requires_grad = False
-        self.vals.requires_grad = False
+    def pop_last_hits(self):
+        """获取并清除最近命中的槽位"""
+        hits = self._last_hits
+        self._last_hits = None
+        return hits
     
-    def unfreeze_all(self):
-        """解冻所有参数（参与训练）"""
-        self.keys.requires_grad = True
-        self.vals.requires_grad = True
+    def freeze_all(self):
+        """冻结所有参数"""
+        for p in self.parameters():
+            p.requires_grad = False
     
     def unfreeze_slots(self, slot_ids: List[int]):
-        """
-        解冻指定槽位用于训练
-        
-        参数:
-            slot_ids: 要解冻的槽位 ID 列表
-        
-        注意：这会设置 trainable_mask，需要配合 set_trainable_slots 使用
-        """
+        """解冻指定槽位（用于稀疏训练）"""
         self.set_trainable_slots(slot_ids)
-        # 确保参数可训练
-        self.keys.requires_grad = True
-        self.vals.requires_grad = True
+        # 注意：keys 和 vals 总是可训练的，通过梯度 mask 来控制
+        for p in self.parameters():
+            p.requires_grad = True
     
-    def freeze_slots(self, slot_ids: List[int]):
-        """冻结指定槽位（部分冻结需要在训练时配合 optimizer 使用）"""
-        # 注意：PyTorch 的 Parameter 不支持部分冻结
-        # 这个方法主要用于配合 set_trainable_slots 和自定义训练逻辑
-        pass
+    def top_slots(self, t: int) -> List[int]:
+        """获取访问频率最高的 t 个槽位"""
+        return torch.topk(self.acc_counts, k=min(t, self.num_slots)).indices.tolist()
     
     def extra_repr(self) -> str:
         """额外的表示信息"""
         return (f'd_model={self.d_model}, num_slots={self.num_slots}, '
-                f'k_top={self.k_top}, alpha={self.alpha}')
+                f'k_top={self.k_top}, alpha={self.alpha}, tau={self.tau}')
