@@ -137,23 +137,31 @@ class KVMemoryLayer(nn.Module):
         # 记录最近命中（用于特异度追踪）
         if self.training and record_hits:
             with torch.no_grad():
-                # 分块传输到 CPU 避免 TPU HBM 分配
-                if HAS_XLA:
-                    xm.mark_step()  # 结算 TPU 端前序计算，避免把 CPU 逻辑编进图
+                # 1) 释放可能的大中间量，避免引用保留在内存图
+                import gc
+                for name in ["scores", "topv", "attn", "sel_vals", "out", "q", "keys"]:
+                    if name in locals():
+                        try:
+                            del locals()[name]
+                        except:
+                            pass
+                gc.collect()
                 
-                flat = topi.detach().reshape(-1)  # 不要在设备上改 dtype！
-                CHUNK = 262_144  # 每次搬 256k 索引（约几百 KB）
+                # 2) 绝对不要在 TPU 上改 dtype！只 reshape
+                flat = topi.detach().reshape(-1)
+                
+                # 3) 分块拷到 CPU（避免一次性占用 HBM）
+                CHUNK = 262_144  # 256k 索引一块
                 host_parts = []
                 for sub in torch.split(flat, CHUNK):
-                    host_parts.append(sub.cpu())  # 分块拷到 CPU
+                    # 只做 .cpu()，不做类型转换
+                    host_parts.append(sub.cpu())
                 
-                if HAS_XLA:
-                    xm.mark_step()
-                
-                hit_ids = torch.cat(host_parts, dim=0).to(torch.int64)  # CPU 上再转 int64
+                # 4) 在 CPU 上再做 dtype 转换 + 直方图统计（等价 unique）
+                hit_ids = torch.cat(host_parts, dim=0).to(torch.int64)  # 只在 CPU 上转 dtype
                 
                 # 用 bincount 得到每个 slot 是否被命中，再取非零索引
-                counts = torch.bincount(hit_ids, minlength=self.num_slots)  # int64 on CPU
+                counts = torch.bincount(hit_ids, minlength=self.num_slots)  # CPU
                 unique_ids = torch.nonzero(counts, as_tuple=False).reshape(-1).to(torch.int64)
                 
                 # 保持在 CPU，后续用到时再 .to(device)
