@@ -1,9 +1,11 @@
 # src/sumcar/data/finqa_rc.py
-from datasets import load_dataset
-from typing import Dict, Iterable
+from datasets import load_dataset, Dataset
+from typing import Dict, Iterable, List
 import os
 from pathlib import Path
 import re
+import json
+import urllib.request
 
 _SPLIT_MAP = {"train": "train", "dev": "dev", "test": "test"}
 
@@ -67,27 +69,30 @@ def _resolve_data_files(split: str):
     base = "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset"
     return f"{base}/{fname}"
 
-def load(split: str = 'train', use_rc_filter: bool = False) -> Iterable[Dict]:
+def load(split: str = 'train', use_rc_filter: bool = False) -> Dataset:
     """
     Load FinQA dataset directly from GitHub JSON files (bypasses HF script limitations).
     
     Args:
         split: 'train', 'dev', or 'test'
         use_rc_filter: If True, filter to "non-retrieval RC subset"
-    """
-    import json
-    import urllib.request
     
+    Returns:
+        Dataset object compatible with HuggingFace datasets API
+    """
     sp = _SPLIT_MAP.get(split, split)
     data_file = _resolve_data_files(sp)
     
     # Load JSON directly to avoid Arrow type inference issues
-    if data_file.startswith("http://") or data_file.startswith("https://"):
-        with urllib.request.urlopen(data_file) as response:
-            raw_data = json.loads(response.read().decode())
-    else:
-        with open(data_file, 'r', encoding='utf-8') as f:
-            raw_data = json.load(f)
+    try:
+        if data_file.startswith("http://") or data_file.startswith("https://"):
+            with urllib.request.urlopen(data_file) as response:
+                raw_data = json.loads(response.read().decode())
+        else:
+            with open(data_file, 'r', encoding='utf-8') as f:
+                raw_data = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load FinQA data from {data_file}: {e}")
     
     # raw_data is a dict with keys like "train", "dev", "test" or direct list
     if isinstance(raw_data, dict):
@@ -96,6 +101,10 @@ def load(split: str = 'train', use_rc_filter: bool = False) -> Iterable[Dict]:
     else:
         raw_items = raw_data
     
+    if not isinstance(raw_items, list):
+        raise RuntimeError(f"Expected list of items, got {type(raw_items)}")
+    
+    # Format all examples
     data = [_format_example(item) for item in raw_items]
     
     # Optional: filter to RC subset (no retrieval needed)
@@ -105,4 +114,5 @@ def load(split: str = 'train', use_rc_filter: bool = False) -> Iterable[Dict]:
     # Filter out empty prompts
     data = [ex for ex in data if ex.get('prompt') and len(ex['prompt']) > 0]
     
-    return data
+    # Convert to Dataset object for compatibility with HF datasets API
+    return Dataset.from_list(data)
