@@ -15,6 +15,7 @@ from .kv_memory import KVMemoryLayer
 from .metrics import choose_top_t_from_counts, SpecificityTracker, mask_kv_grads
 from ..utils.io import ensure_dir, dump_json
 from ..utils.logger import Logger
+from ..utils.checkpoint import CheckpointManager, TrainingState
 
 
 class SparseFinetuner:
@@ -212,7 +213,7 @@ class SparseFinetuner:
             
             self.logger.log(f'Epoch {ep + 1}/{epochs} done')
     
-    def build_patch(self, task: str, top_t: int, out_dir: str) -> Dict:
+    def build_patch(self, task: str, top_t: int, out_dir: str, train_stats: Dict = None, use_ckpt_manager: bool = True) -> Dict:
         """
         构建并保存任务 patch（使用特异度分数）
         
@@ -220,6 +221,8 @@ class SparseFinetuner:
             task: 任务名称
             top_t: 选择的槽位数量
             out_dir: 输出目录
+            train_stats: 训练统计信息（可选）
+            use_ckpt_manager: 是否使用新的 checkpoint 管理器
         
         返回:
             patch 字典
@@ -227,20 +230,96 @@ class SparseFinetuner:
         # 使用特异度追踪器选择 top-t 槽位
         slot_ids = self.spec_tracker.top_t(top_t).tolist()
         
-        # 导出 patch
+        # 计算 specificity 分数
+        specificity_all = self.spec_tracker.specificity()
+        specificity = specificity_all[slot_ids].tolist()
+        
+        # 槽位访问统计
+        access_counts = self.mem.get_access_counts()
+        access_counts_list = [int(access_counts[sid]) for sid in slot_ids]
+        
+        # 获取 K/V 张量
+        keys = self.mem.keys[slot_ids]
+        values = self.mem.vals[slot_ids]
+        
+        # 如果使用新的 checkpoint 管理器
+        if use_ckpt_manager and hasattr(self, 'ckpt_manager'):
+            # 记忆配置
+            memory_config = {
+                'num_slots': self.mem.num_slots,
+                'd_model': self.mem.d_model,
+                'k_top': self.mem.k_top,
+                'alpha': self.mem.alpha,
+                'tau': self.mem.tau,
+                'use_gate': self.mem.use_gate,
+            }
+            
+            # 统计信息
+            stats = {
+                'access_total': int(access_counts.sum().item()),
+                'unique_slots_accessed': int((access_counts > 0).sum().item()),
+                'specificity_stats': {
+                    'max': float(specificity_all.max().item()),
+                    'min': float(specificity_all.min().item()),
+                    'mean': float(specificity_all.mean().item()),
+                    'top_t_min': float(specificity_all[slot_ids].min().item()),
+                },
+                'access_stats': {
+                    'total': int(access_counts.sum().item()),
+                    'max': int(access_counts.max().item()),
+                    'mean': float(access_counts.float().mean().item()),
+                    'top_t_total': int(access_counts[slot_ids].sum().item()),
+                },
+            }
+            
+            # 使用 checkpoint 管理器保存
+            self.ckpt_manager.save_patch(
+                slot_ids=slot_ids,
+                keys=keys,
+                values=values,
+                specificity=specificity,
+                access_counts=access_counts_list,
+                memory_config=memory_config,
+                train_meta=train_stats or {},
+                stats=stats
+            )
+        
+        # 同时保存旧格式（兼容性）
         patch = self.mem.get_patch(slot_ids)
         patch['task'] = task
-        patch['specificity'] = self.spec_tracker.specificity()[slot_ids].tolist()
+        patch['specificity'] = specificity
+        patch['access_counts'] = access_counts_list
         
         # 元信息
         meta = {
             'task': task,
             'top_t': top_t,
             'num_slots': self.mem.num_slots,
-            'access_total': int(self.mem.acc_counts.sum().item())
+            'access_total': int(access_counts.sum().item()),
+            'unique_slots_accessed': int((access_counts > 0).sum().item()),
+            
+            # TF-IDF 计算信息
+            'specificity_stats': {
+                'max': float(specificity_all.max().item()),
+                'min': float(specificity_all.min().item()),
+                'mean': float(specificity_all.mean().item()),
+                'top_t_min': float(specificity_all[slot_ids].min().item()),
+            },
+            
+            # 槽位访问统计
+            'access_stats': {
+                'total': int(access_counts.sum().item()),
+                'max': int(access_counts.max().item()),
+                'mean': float(access_counts.float().mean().item()),
+                'top_t_total': int(access_counts[slot_ids].sum().item()),
+            },
         }
         
-        # 保存
+        # 合并训练统计
+        if train_stats:
+            meta.update(train_stats)
+        
+        # 保存旧格式
         ensure_dir(out_dir)
         dump_json(patch, os.path.join(out_dir, f'patch_{task}.json'))
         dump_json(meta, os.path.join(out_dir, f'patch_{task}_meta.json'))
