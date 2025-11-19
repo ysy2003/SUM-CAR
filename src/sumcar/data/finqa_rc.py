@@ -75,11 +75,28 @@ def load(split: str = 'train', use_rc_filter: bool = False) -> Iterable[Dict]:
         split: 'train', 'dev', or 'test'
         use_rc_filter: If True, filter to "non-retrieval RC subset"
     """
-    sp = _SPLIT_MAP.get(split, split)
-    data_files = {"train": _resolve_data_files(sp)}
-    raw = load_dataset("json", data_files=data_files, split="train")
+    import json
+    import urllib.request
     
-    data = [_format_example(item) for item in raw]
+    sp = _SPLIT_MAP.get(split, split)
+    data_file = _resolve_data_files(sp)
+    
+    # Load JSON directly to avoid Arrow type inference issues
+    if data_file.startswith("http://") or data_file.startswith("https://"):
+        with urllib.request.urlopen(data_file) as response:
+            raw_data = json.loads(response.read().decode())
+    else:
+        with open(data_file, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+    
+    # raw_data is a dict with keys like "train", "dev", "test" or direct list
+    if isinstance(raw_data, dict):
+        # Try common keys
+        raw_items = raw_data.get(sp) or raw_data.get('data') or list(raw_data.values())[0]
+    else:
+        raw_items = raw_data
+    
+    data = [_format_example(item) for item in raw_items]
     
     # Optional: filter to RC subset (no retrieval needed)
     if use_rc_filter:
