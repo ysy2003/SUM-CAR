@@ -1,7 +1,7 @@
 base_model: meta-llama/Llama-3.2-1B
 mem:
-  num_slots: 4096
-  k_top: 16
+  num_slots: 2048
+  k_top: 8
   alpha: 1.0
   tau: 10.0
   use_gate: true
@@ -11,10 +11,10 @@ train:
   lr: 5.0e-4
   lr_kv: 1.0e-3
   lr_gate: 1.0e-4
-  batch_size: 2
-  max_length: 256
-  probe_steps: 1000
-  top_t: 1024
+  batch_size: 1
+  max_length: 128
+  probe_steps: 200
+  top_t: 512
   refresh_every: 200
   save_dir: out/code
   seed: 42
