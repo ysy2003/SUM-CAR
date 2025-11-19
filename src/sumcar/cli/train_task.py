@@ -64,6 +64,11 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
     mem_cfg = cfg['mem']
     train_cfg = cfg['train']
     
+    # 打印配置以验证参数（防止 YAML 重复键问题）
+    print(f"[cfg] num_slots={mem_cfg['num_slots']}, k_top={mem_cfg['k_top']}, "
+          f"probe_steps={train_cfg.get('probe_steps', 1000)}, top_t={train_cfg['top_t']}, "
+          f"batch_size={train_cfg['batch_size']}, max_length={train_cfg['max_length']}")
+    
     # 从 config 推断 task（如果未提供）
     if not task:
         task = train_cfg.get('dataset', 'unknown').split('_')[0]

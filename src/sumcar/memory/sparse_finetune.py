@@ -105,10 +105,16 @@ class SparseFinetuner:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
                 
-                # 更新特异度追踪
-                hits = self.mem.pop_last_hits()
-                if hits is not None:
-                    self.spec_tracker.update_from_hits(hits)
+                # 更新特异度追踪（每 50 步统计一次，降低开销）
+                if cnt % 50 == 0:
+                    hits = self.mem.pop_last_hits()
+                    if hits is not None:
+                        if self.use_xla:
+                            import torch_xla.core.xla_model as xm
+                            xm.mark_step()  # 结算 TPU 计算
+                        self.spec_tracker.update_from_hits(hits)
+                        if self.use_xla:
+                            xm.mark_step()  # CPU 统计不进 XLA 图
                 
                 cnt += 1
                 if cnt >= steps:
@@ -176,13 +182,18 @@ class SparseFinetuner:
                 sch.step()
                 opt.zero_grad(set_to_none=True)
                 
-                # 更新特异度
-                hits = self.mem.pop_last_hits()
-                if hits is not None:
-                    self.spec_tracker.update_from_hits(hits)
-                
-                # 定期刷新 top-t 可训练槽位
+                # 更新特异度（每 refresh_every 步统计一次）
                 if step % refresh_every == 0:
+                    hits = self.mem.pop_last_hits()
+                    if hits is not None:
+                        if self.use_xla:
+                            import torch_xla.core.xla_model as xm
+                            xm.mark_step()  # 结算 TPU 计算
+                        self.spec_tracker.update_from_hits(hits)
+                        if self.use_xla:
+                            xm.mark_step()  # CPU 统计不进 XLA 图
+                    
+                    # 刷新 top-t 可训练槽位
                     top_t = self.cfg.get('top_t', 2048)
                     top_slots = self.spec_tracker.top_t(top_t).to(device)
                     self.mem.set_trainable_slots(top_slots.tolist())
