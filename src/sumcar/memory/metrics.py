@@ -19,15 +19,27 @@ class SpecificityTracker:
     
     def __init__(self, M: int):
         self.M = M
-        self.tf = torch.zeros(M, dtype=torch.long)   # 当前任务命中次数
-        self.bg = torch.ones(M, dtype=torch.long)    # 背景/先验（避免除0）
+        # 频次表常驻 CPU，int32 足够（节省内存）
+        self.tf = torch.zeros(M, dtype=torch.int32, device='cpu')
+        self.bg = torch.ones(M, dtype=torch.int32, device='cpu')    # 背景/先验（避免除0）
     
     @torch.no_grad()
-    def update_from_hits(self, hit_ids: torch.Tensor):
-        """更新任务特定的访问频率"""
+    def update_from_hits(self, hit_ids: torch.Tensor, chunk: int = 500_000):
+        """更新任务特定的访问频率（优化：CPU 端 bincount，避免 TPU HBM 分配）"""
         if hit_ids is None or len(hit_ids) == 0:
             return
-        self.tf.index_add_(0, hit_ids.cpu(), torch.ones_like(hit_ids.cpu(), dtype=torch.long))
+        
+        # 1) 拉到 CPU + 展平 + 转 int64 以便 bincount
+        hit_ids = hit_ids.detach().to('cpu').reshape(-1).to(torch.int64)
+        
+        # 2) 分块统计，避免一次性占用太多 host RAM
+        n = hit_ids.numel()
+        for s in range(0, n, chunk):
+            sub = hit_ids[s:s+chunk]
+            # bincount 的长度固定为 M，不会膨胀
+            counts = torch.bincount(sub, minlength=self.M)  # int64
+            # 3) 累加到 CPU 侧的 int32 计数器
+            self.tf.add_(counts[:self.M].to(torch.int32))  # in-place on CPU
     
     @torch.no_grad()
     def specificity(self):
