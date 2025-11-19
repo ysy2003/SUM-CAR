@@ -103,8 +103,9 @@ class KVMemoryLayer(nn.Module):
         # 计算相似度 [B, L, M]
         scores = torch.einsum('bld,md->blm', q, keys) / (D ** 0.5)
         
-        # Top-k 检索
-        topv, topi = torch.topk(scores, k=min(self.k_top, self.num_slots), dim=-1)  # [B, L, K]
+        # Top-k 检索（使用 int32 索引降低内存）
+        topv, topi_i64 = torch.topk(scores, k=min(self.k_top, self.num_slots), dim=-1)  # [B, L, K]
+        topi = topi_i64.to(torch.int32)  # 减少 XLA 内存占用
         
         # 注意力权重（带温度）
         attn = F.softmax(topv / self.tau, dim=-1)  # [B, L, K]
@@ -123,14 +124,22 @@ class KVMemoryLayer(nn.Module):
         # 记录访问统计
         if self._log_access:
             with torch.no_grad():
-                flat = topi.reshape(-1)
+                flat = topi.reshape(-1).to(torch.int64)  # bincount 需要 int64
                 binc = torch.bincount(flat, minlength=self.num_slots)
                 self.acc_counts += binc.to(self.acc_counts.device)
         
         # 记录最近命中（用于特异度追踪）
         if self.training and record_hits:
             with torch.no_grad():
-                self._last_hits = torch.unique(topi.reshape(-1))
+                # 使用 CPU 端 bincount 避免 TPU HBM 分配
+                hit_ids = topi.detach().to('cpu').reshape(-1).to(torch.int64)
+                
+                # 用 bincount 得到每个 slot 是否被命中，再取非零索引
+                counts = torch.bincount(hit_ids, minlength=self.num_slots)  # int64 on CPU
+                unique_ids = torch.nonzero(counts, as_tuple=False).reshape(-1).to(torch.int64)
+                
+                # 保持在 CPU，后续用到时再 .to(device)
+                self._last_hits = unique_ids
         
         return self.alpha * out
     
