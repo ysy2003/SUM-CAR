@@ -2,6 +2,7 @@
 KV Memory Layer for SUM-CAR
 基于 key-value 检索的记忆层，支持 top-k 路由和稀疏更新
 """
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,7 +36,10 @@ class KVMemoryLayer(nn.Module):
         log_access: bool = True,
         tau: float = 10.0,
         use_gate: bool = True,
-        normalize_retrieval: bool = True
+        normalize_retrieval: bool = True,
+        track_hits: Optional[bool] = None,
+        hits_source: str = "topk",
+        track_interval: int = 200
     ):
         """
         参数:
@@ -47,6 +51,9 @@ class KVMemoryLayer(nn.Module):
             tau: 温度参数（用于 softmax）
             use_gate: 是否使用门控机制
             normalize_retrieval: 是否归一化 query 和 key
+            track_hits: 是否追踪命中（None=自动检测，XLA下默认False）
+            hits_source: 命中来源 "topk" 或 "none"
+            track_interval: 统计间隔步数
         """
         super().__init__()
         
@@ -57,6 +64,17 @@ class KVMemoryLayer(nn.Module):
         self._log_access = log_access
         self.tau = tau
         self.normalize_retrieval = normalize_retrieval
+        
+        # 命中统计控制（XLA 下默认禁用以避免 OOM）
+        if track_hits is None:
+            # 检测是否在 TPU/XLA 环境
+            is_xla = os.environ.get("PJRT_DEVICE", "") == "TPU" or HAS_XLA
+            track_hits = not is_xla
+        self.track_hits = track_hits
+        self.hits_source = hits_source
+        self.track_interval = track_interval
+        self._step = 0
+        self._last_hits_cpu = None  # 存储在 CPU 上的命中统计
         
         # Keys 和 Values
         self.keys = nn.Parameter(torch.randn(num_slots, d_model) * 0.02)
@@ -127,45 +145,19 @@ class KVMemoryLayer(nn.Module):
             g = torch.sigmoid(self.gate(x))  # [B, L, 1]
             out = g * out
         
-        # 记录访问统计
+        # 记录访问统计（仅计数，不做 CPU 拷贝）
         if self._log_access:
             with torch.no_grad():
                 flat = topi.reshape(-1).to(torch.int64)  # bincount 需要 int64
                 binc = torch.bincount(flat, minlength=self.num_slots)
                 self.acc_counts += binc.to(self.acc_counts.device)
         
-        # 记录最近命中（用于特异度追踪）
-        if self.training and record_hits:
-            with torch.no_grad():
-                # 1) 释放可能的大中间量，避免引用保留在内存图
-                import gc
-                for name in ["scores", "topv", "attn", "sel_vals", "out", "q", "keys"]:
-                    if name in locals():
-                        try:
-                            del locals()[name]
-                        except:
-                            pass
-                gc.collect()
-                
-                # 2) 绝对不要在 TPU 上改 dtype！只 reshape
-                flat = topi.detach().reshape(-1)
-                
-                # 3) 分块拷到 CPU（避免一次性占用 HBM）
-                CHUNK = 262_144  # 256k 索引一块
-                host_parts = []
-                for sub in torch.split(flat, CHUNK):
-                    # 只做 .cpu()，不做类型转换
-                    host_parts.append(sub.cpu())
-                
-                # 4) 在 CPU 上再做 dtype 转换 + 直方图统计（等价 unique）
-                hit_ids = torch.cat(host_parts, dim=0).to(torch.int64)  # 只在 CPU 上转 dtype
-                
-                # 用 bincount 得到每个 slot 是否被命中，再取非零索引
-                counts = torch.bincount(hit_ids, minlength=self.num_slots)  # CPU
-                unique_ids = torch.nonzero(counts, as_tuple=False).reshape(-1).to(torch.int64)
-                
-                # 保持在 CPU，后续用到时再 .to(device)
-                self._last_hits = unique_ids
+        # 保存小体量的 k_top indices 供外部统计使用（不在这里做 CPU 拷贝）
+        if self.training and record_hits and self.track_hits:
+            # 只保存引用，不做任何 CPU 操作（避免触发 XLA 图物化）
+            self.last_k_indices = topi.detach()  # [B, L, K]，很小
+        
+        self._step += 1
         
         return self.alpha * out
     
@@ -273,10 +265,44 @@ class KVMemoryLayer(nn.Module):
         """禁用访问统计"""
         self._log_access = False
     
+    @torch.no_grad()
+    def maybe_collect_hits_light(self):
+        """
+        低频、小体量统计：只基于 k_top 的 indices（很小），且仅在 CPU 上做。
+        避免在 XLA 训练时触发大规模 HBM 分配。
+        """
+        if not self.track_hits or self.hits_source == "none":
+            self._last_hits_cpu = None
+            return
+        
+        # 仅在指定的步数间隔收集
+        if (self._step % self.track_interval) != 0:
+            self._last_hits_cpu = None
+            return
+        
+        # 检查是否有可用的 k_indices
+        if not hasattr(self, 'last_k_indices') or self.last_k_indices is None:
+            self._last_hits_cpu = None
+            return
+        
+        try:
+            # 全程 CPU 侧统计（小体量：k_top ≪ top_t），不会占用 TPU HBM
+            k_indices = self.last_k_indices
+            hit_ids = k_indices.to('cpu').reshape(-1).to(torch.int64)
+            counts = torch.bincount(hit_ids, minlength=self.num_slots)
+            unique_ids = torch.nonzero(counts, as_tuple=False).reshape(-1).to(torch.int64)
+            self._last_hits_cpu = unique_ids  # 留在 CPU
+        except Exception as e:
+            # 如果统计失败，静默忽略（训练继续）
+            self._last_hits_cpu = None
+        finally:
+            # 清理引用
+            self.last_k_indices = None
+    
     def pop_last_hits(self):
-        """获取并清除最近命中的槽位"""
-        hits = self._last_hits
-        self._last_hits = None
+        """获取并清除最近命中的槽位（CPU 版本）"""
+        hits = self._last_hits_cpu
+        self._last_hits_cpu = None
         return hits
     
     def freeze_all(self):

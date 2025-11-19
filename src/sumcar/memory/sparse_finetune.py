@@ -56,7 +56,10 @@ class SparseFinetuner:
             alpha=mem_cfg.get('alpha', 1.0),
             tau=mem_cfg.get('tau', 10.0),
             use_gate=mem_cfg.get('use_gate', True),
-            normalize_retrieval=mem_cfg.get('normalize_retrieval', True)
+            normalize_retrieval=mem_cfg.get('normalize_retrieval', True),
+            track_hits=mem_cfg.get('track_hits', None),
+            hits_source=mem_cfg.get('hits_source', 'topk'),
+            track_interval=mem_cfg.get('track_interval', 200)
         )
         
         # 创建增强模型
@@ -105,16 +108,20 @@ class SparseFinetuner:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
                 
-                # 更新特异度追踪（每 50 步统计一次，降低开销）
+                # 更新特异度追踪（低频统计，避免 XLA OOM）
                 if cnt % 50 == 0:
+                    if self.use_xla:
+                        import torch_xla.core.xla_model as xm
+                        xm.mark_step()  # 结算 TPU 计算
+                    
+                    # 触发轻量级统计（仅基于 k_top，CPU 侧）
+                    self.mem.maybe_collect_hits_light()
                     hits = self.mem.pop_last_hits()
                     if hits is not None:
-                        if self.use_xla:
-                            import torch_xla.core.xla_model as xm
-                            xm.mark_step()  # 结算 TPU 计算
                         self.spec_tracker.update_from_hits(hits)
-                        if self.use_xla:
-                            xm.mark_step()  # CPU 统计不进 XLA 图
+                    
+                    if self.use_xla:
+                        xm.mark_step()  # CPU 统计不进 XLA 图
                 
                 cnt += 1
                 if cnt >= steps:
@@ -184,14 +191,18 @@ class SparseFinetuner:
                 
                 # 更新特异度（每 refresh_every 步统计一次）
                 if step % refresh_every == 0:
+                    if self.use_xla:
+                        import torch_xla.core.xla_model as xm
+                        xm.mark_step()  # 结算 TPU 计算
+                    
+                    # 触发轻量级统计（仅基于 k_top，CPU 侧）
+                    self.mem.maybe_collect_hits_light()
                     hits = self.mem.pop_last_hits()
                     if hits is not None:
-                        if self.use_xla:
-                            import torch_xla.core.xla_model as xm
-                            xm.mark_step()  # 结算 TPU 计算
                         self.spec_tracker.update_from_hits(hits)
-                        if self.use_xla:
-                            xm.mark_step()  # CPU 统计不进 XLA 图
+                    
+                    if self.use_xla:
+                        xm.mark_step()  # CPU 统计不进 XLA 图
                     
                     # 刷新 top-t 可训练槽位
                     top_t = self.cfg.get('top_t', 2048)
