@@ -7,6 +7,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Dict, Optional
 
+try:
+    import torch_xla.core.xla_model as xm
+    HAS_XLA = True
+except ImportError:
+    HAS_XLA = False
+
 
 class KVMemoryLayer(nn.Module):
     """
@@ -131,8 +137,20 @@ class KVMemoryLayer(nn.Module):
         # 记录最近命中（用于特异度追踪）
         if self.training and record_hits:
             with torch.no_grad():
-                # 使用 CPU 端 bincount 避免 TPU HBM 分配
-                hit_ids = topi.detach().to('cpu').reshape(-1).to(torch.int64)
+                # 分块传输到 CPU 避免 TPU HBM 分配
+                if HAS_XLA:
+                    xm.mark_step()  # 结算 TPU 端前序计算，避免把 CPU 逻辑编进图
+                
+                flat = topi.detach().reshape(-1)  # 不要在设备上改 dtype！
+                CHUNK = 262_144  # 每次搬 256k 索引（约几百 KB）
+                host_parts = []
+                for sub in torch.split(flat, CHUNK):
+                    host_parts.append(sub.cpu())  # 分块拷到 CPU
+                
+                if HAS_XLA:
+                    xm.mark_step()
+                
+                hit_ids = torch.cat(host_parts, dim=0).to(torch.int64)  # CPU 上再转 int64
                 
                 # 用 bincount 得到每个 slot 是否被命中，再取非零索引
                 counts = torch.bincount(hit_ids, minlength=self.num_slots)  # int64 on CPU
