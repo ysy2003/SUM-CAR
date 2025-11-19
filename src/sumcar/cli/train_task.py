@@ -1,8 +1,9 @@
-import os, yaml 
+import os, yaml, hashlib, time
 import fire 
 import math
+import torch
 from torch.utils.data import DataLoader 
-from transformers import AutoTokenizer 
+from transformers import AutoTokenizer, __version__ as transformers_version
 from datasets import Dataset 
 from dotenv import load_dotenv
 
@@ -16,6 +17,7 @@ from ..data import code_codexglue as cglue
 from ..data import mbpp as mbpp 
 from ..data import finqa_rc as finqa
 from ..memory.sparse_finetune import SparseFinetuner
+from ..utils.checkpoint import CheckpointManager
 
 load_dotenv()
 
@@ -101,6 +103,15 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
 
     # 3) Build trainer (model + memory) with XLA support
     ft = SparseFinetuner(base_model, mem_cfg, train_cfg, tokenizer=tok, logger=logger, use_xla=use_xla)
+    
+    # 创建 checkpoint 管理器
+    ckpt_manager = CheckpointManager(
+        base_dir=".",  # 当前目录
+        task=task,
+        base_model_id=base_model
+    )
+    ft.ckpt_manager = ckpt_manager  # 注入到 finetuner
+    logger.log(f'Checkpoint dirs created: runs/{task}/ckpts, patches/, merges/')
 
     # 4) Phase I: probe slot access (all frozen, just logging)
     ft.mem.freeze_all()
@@ -119,21 +130,58 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
     logger.log(f'Phase II: Training {train_cfg["epochs"]} epochs with refresh_every={refresh_every}...')
     ft.train(dl, epochs=train_cfg['epochs'], refresh_every=refresh_every)
 
-    # 6) Export patch
+    # 6) 收集训练统计信息
+    import transformers
+    train_stats = {
+        # 环境与模型信息
+        'base_model_id': base_model,
+        'base_model_hash': hashlib.md5(base_model.encode()).hexdigest()[:8],
+        'transformers_version': transformers.__version__,
+        'torch_version': torch.__version__,
+        'use_xla': use_xla,
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        
+        # 训练配置
+        'seed': train_cfg.get('seed', 42),
+        'optimizer': 'AdamW',
+        'lr_kv': train_cfg.get('lr_kv', train_cfg['lr']),
+        'lr_gate': train_cfg.get('lr_gate', train_cfg['lr'] * 0.1),
+        'scheduler': 'linear_warmup',
+        'batch_size': train_cfg['batch_size'],
+        'max_length': train_cfg['max_length'],
+        'epochs': train_cfg['epochs'],
+        
+        # 数据统计
+        'dataset': ds_name,
+        'num_examples': len(ds),
+        'total_steps': len(dl) * train_cfg['epochs'],
+        'tokens_total': len(ds) * train_cfg['max_length'] * train_cfg['epochs'],
+        
+        # 记忆配置
+        'mem_config': {
+            'num_slots': mem_cfg['num_slots'],
+            'k_top': mem_cfg['k_top'],
+            'd_model': ft.mem.d_model,
+            'alpha': mem_cfg.get('alpha', 1.0),
+            'tau': mem_cfg.get('tau', 10.0),
+            'use_gate': mem_cfg.get('use_gate', True),
+        },
+        
+        # 稀疏训练配置
+        'sparse_config': {
+            'top_t': top_t,
+            'probe_steps': train_cfg.get('probe_steps', 1000),
+            'refresh_every': train_cfg.get('refresh_every', 200),
+            'specificity_method': 'tf-idf',
+        },
+    }
+    
+    # 7) Export patch
     save_dir = train_cfg['save_dir']
-    patch = ft.build_patch(task, top_t, save_dir)
+    patch = ft.build_patch(task, top_t, save_dir, train_stats)
     ensure_dir('out')
     dump_json(patch, os.path.join('out', f'patch_{task}.json'))
-    
-    # 保存元数据（包含 specificity 信息）
-    meta = {
-        'task': task,
-        'slot_ids': slot_ids,
-        'top_t': top_t,
-        'num_slots': mem_cfg['num_slots'],
-        'use_xla': use_xla
-    }
-    dump_json(meta, os.path.join('out', f'patch_{task}_meta.json'))
+    dump_json(train_stats, os.path.join('out', f'patch_{task}_meta.json'))
     logger.log('patch saved to out/', f'patch_{task}.json')
 
 
