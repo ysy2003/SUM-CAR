@@ -14,11 +14,11 @@ train:
   lr_kv: 1.0e-3
   lr_gate: 1.0e-4
   batch_size: 1
-  max_length: 128  # Reduced from 192
+  max_length: 256  # Increased for FinQA (contains long tables)
   probe_steps: 200  # Reduced from 300
   top_t: 256  # Reduced from 512
   refresh_every: 100
   save_dir: out/finqa
   seed: 42
-  dataset: finqa_rc  # 使用正确的 dataset 名称
+  dataset: finqa_rc  
   max_examples: 500  # Limit for faster iteration

@@ -67,8 +67,12 @@ class SparseFinetuner:
         self.model = MemoryAugmentedCausalLM(base_model, self.mem)
         self.cfg = train_cfg
         
-        # 特异度追踪器
-        self.spec_tracker = SpecificityTracker(M=mem_cfg['num_slots'])
+        # 特异度追踪器（传入任务名称）
+        task_name = train_cfg.get('dataset', 'unknown')
+        self.spec_tracker = SpecificityTracker(
+            M=mem_cfg['num_slots'],
+            task_name=task_name
+        )
     
     def _infer_d_model(self, base_model: str) -> int:
         """
@@ -228,14 +232,17 @@ class SparseFinetuner:
             patch 字典
         """
         # 使用特异度追踪器选择 top-t 槽位
-        slot_ids = self.spec_tracker.top_t(top_t).tolist()
+        slot_ids = self.spec_tracker.top_t(top_t, total_tasks=1).tolist()
         
-        # 计算 specificity 分数
-        specificity_all = self.spec_tracker.specificity()
+        # 计算 specificity 分数（TF-IDF，归一化到 [0,1]）
+        specificity_all = self.spec_tracker.specificity(total_tasks=1, normalize=True)
         specificity = specificity_all[slot_ids].tolist()
         
+        # 获取统计信息
+        spec_stats = self.spec_tracker.get_stats()
+        
         # 槽位访问统计
-        access_counts = self.mem.get_access_counts()
+        access_counts = self.spec_tracker.get_access_counts()
         access_counts_list = [int(access_counts[sid]) for sid in slot_ids]
         
         # 获取 K/V 张量
@@ -256,20 +263,23 @@ class SparseFinetuner:
             
             # 统计信息
             stats = {
-                'access_total': int(access_counts.sum().item()),
-                'unique_slots_accessed': int((access_counts > 0).sum().item()),
+                'access_total': spec_stats['total_accesses'],
+                'unique_slots_accessed': spec_stats['unique_slots_accessed'],
                 'specificity_stats': {
-                    'max': float(specificity_all.max().item()),
-                    'min': float(specificity_all.min().item()),
-                    'mean': float(specificity_all.mean().item()),
+                    'max': spec_stats['spec_max'],
+                    'min': spec_stats['spec_min'],
+                    'mean': spec_stats['spec_mean'],
+                    'std': spec_stats['spec_std'],
                     'top_t_min': float(specificity_all[slot_ids].min().item()),
                 },
                 'access_stats': {
-                    'total': int(access_counts.sum().item()),
-                    'max': int(access_counts.max().item()),
-                    'mean': float(access_counts.float().mean().item()),
-                    'top_t_total': int(access_counts[slot_ids].sum().item()),
+                    'total': spec_stats['total_accesses'],
+                    'max': spec_stats['max_access'],
+                    'unique_accessed': spec_stats['unique_slots_accessed'],
+                    'top_t_total': sum(access_counts_list),
                 },
+                # IDF 信息（用于重现实验）
+                'idf_df_counts': self.spec_tracker.idf_df_counts,
             }
             
             # 使用 checkpoint 管理器保存
@@ -295,24 +305,26 @@ class SparseFinetuner:
             'task': task,
             'top_t': top_t,
             'num_slots': self.mem.num_slots,
-            'access_total': int(access_counts.sum().item()),
-            'unique_slots_accessed': int((access_counts > 0).sum().item()),
             
-            # TF-IDF 计算信息
+            # TF-IDF 统计
             'specificity_stats': {
-                'max': float(specificity_all.max().item()),
-                'min': float(specificity_all.min().item()),
-                'mean': float(specificity_all.mean().item()),
+                'max': spec_stats['spec_max'],
+                'min': spec_stats['spec_min'],
+                'mean': spec_stats['spec_mean'],
+                'std': spec_stats['spec_std'],
                 'top_t_min': float(specificity_all[slot_ids].min().item()),
             },
             
-            # 槽位访问统计
+            # 访问统计
             'access_stats': {
-                'total': int(access_counts.sum().item()),
-                'max': int(access_counts.max().item()),
-                'mean': float(access_counts.float().mean().item()),
-                'top_t_total': int(access_counts[slot_ids].sum().item()),
+                'total': spec_stats['total_accesses'],
+                'max': spec_stats['max_access'],
+                'unique_accessed': spec_stats['unique_slots_accessed'],
+                'top_t_total': sum(access_counts_list),
             },
+            
+            # IDF 信息（用于重现实验）
+            'idf_df_counts': self.spec_tracker.idf_df_counts,
         }
         
         # 合并训练统计
