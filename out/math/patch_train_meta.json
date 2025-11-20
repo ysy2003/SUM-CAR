@@ -1,6 +1,0 @@
-{
-  "task": "train",
-  "top_t": 256,
-  "num_slots": 2048,
-  "access_total": 60652
-}
