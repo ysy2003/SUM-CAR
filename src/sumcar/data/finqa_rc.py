@@ -27,9 +27,12 @@ def _build_context(item: Dict) -> str:
 
 def _format_example(item: Dict) -> Dict:
     """Format example into prompt/target structure"""
-    ans = item.get("answer") or item.get("final_result") or ""
+    # FinQA数据结构：question和answer在'qa'字段里
+    qa = item.get("qa", {})
+    ans = qa.get("answer", "") or qa.get("exe_ans", "") or ""
+    q = qa.get("question", "")
     ctx = _build_context(item)
-    q = item.get("question", "")
+    
     return {
         "context": ctx,
         "question": q,
@@ -38,8 +41,8 @@ def _format_example(item: Dict) -> Dict:
         "target": str(ans).strip(),
         "uid": item.get("id", ""),
         # Keep metadata for debugging
-        "program": item.get("program_re", ""),
-        "gold_inds": item.get("gold_inds", []),
+        "program": qa.get("program_re", "") or qa.get("program", ""),
+        "gold_inds": qa.get("gold_inds", {}),
     }
 
 def _rc_filter(ex: Dict) -> bool:
@@ -49,7 +52,7 @@ def _rc_filter(ex: Dict) -> bool:
     2) Keep samples with single table (FinQA is single report + single table)
     """
     ctx = (ex.get("context") or "").lower()
-    ans = (ex.get("output") or "").lower()
+    ans = (ex.get("answer") or ex.get("target") or "").lower()
     if not ans:
         return False
     # Pure number or number with decimal/percent

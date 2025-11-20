@@ -15,13 +15,29 @@ def choose_top_t_from_counts(counts, t: int) -> List[int]:
 
 
 class SpecificityTracker:
-    """特异度追踪器（用于 TF-IDF 风格的槽位选择）"""
+    """
+    特异度追踪器（TF-IDF 风格）
     
-    def __init__(self, M: int):
+    把"槽位=term，任务=doc"的类比：
+    - tf_t(s) = access_counts_t(s) / sum_s access_counts_t(s)
+    - df(s) = 出现于多少个任务（设阈值=该任务 max access 的 1% 以滤噪）
+    - idf(s) = log((1+T)/(1+df(s))) + 1（平滑）
+    - spec_tfidf(s) = tf_t(s) * idf(s) → 线性归一化到 [0,1]
+    """
+    
+    def __init__(self, M: int, task_name: str = "task", idf_df_counts: Dict[int, int] = None):
+        """
+        参数:
+            M: 槽位总数
+            task_name: 任务名称（用于标识）
+            idf_df_counts: 全局 df 计数（槽位 -> 出现任务数）用于 IDF 计算
+        """
         self.M = M
-        # 频次表常驻 CPU，int32 足够（节省内存）
-        self.tf = torch.zeros(M, dtype=torch.int32, device='cpu')
-        self.bg = torch.ones(M, dtype=torch.int32, device='cpu')    # 背景/先验（避免除0）
+        self.task_name = task_name
+        # 当前任务的访问计数（TF）
+        self.tf_counts = torch.zeros(M, dtype=torch.int32, device='cpu')
+        # 全局 DF 计数（跨任务）
+        self.idf_df_counts = idf_df_counts if idf_df_counts is not None else {}
     
     @torch.no_grad()
     def update_from_hits(self, hit_ids: torch.Tensor, chunk: int = 500_000):
@@ -39,20 +55,80 @@ class SpecificityTracker:
             # bincount 的长度固定为 M，不会膨胀
             counts = torch.bincount(sub, minlength=self.M)  # int64
             # 3) 累加到 CPU 侧的 int32 计数器
-            self.tf.add_(counts[:self.M].to(torch.int32))  # in-place on CPU
+            self.tf_counts.add_(counts[:self.M].to(torch.int32))  # in-place on CPU
     
     @torch.no_grad()
-    def specificity(self):
-        """计算特异度分数（TF-IDF 风格）"""
-        N_all = (self.tf + self.bg).sum().item()
-        score = self.tf.float() * torch.log((torch.tensor(N_all + 1.0)) / (self.bg.float() + 1.0))
-        return score
+    def update_df_counts(self, threshold_ratio: float = 0.01):
+        """
+        更新全局 DF 计数（标记当前任务中显著访问的槽位）
+        
+        参数:
+            threshold_ratio: 阈值比例（相对于 max access）
+        """
+        max_access = self.tf_counts.max().item()
+        threshold = max(1, int(max_access * threshold_ratio))
+        
+        # 标记超过阈值的槽位
+        for slot_id in range(self.M):
+            if self.tf_counts[slot_id] >= threshold:
+                self.idf_df_counts[slot_id] = self.idf_df_counts.get(slot_id, 0) + 1
     
     @torch.no_grad()
-    def top_t(self, t: int):
+    def specificity(self, total_tasks: int = 1, normalize: bool = True):
+        """
+        计算 TF-IDF 特异度分数
+        
+        参数:
+            total_tasks: 总任务数（用于 IDF 计算）
+            normalize: 是否归一化到 [0, 1]
+        
+        返回:
+            特异度分数张量 [M]
+        """
+        # TF: 归一化的访问频率
+        total_accesses = self.tf_counts.sum().item()
+        if total_accesses == 0:
+            return torch.zeros(self.M, dtype=torch.float32, device='cpu')
+        
+        tf = self.tf_counts.float() / total_accesses
+        
+        # IDF: log((1+T)/(1+df(s))) + 1
+        idf = torch.ones(self.M, dtype=torch.float32, device='cpu')
+        for slot_id in range(self.M):
+            df = self.idf_df_counts.get(slot_id, 0)
+            idf[slot_id] = torch.log(torch.tensor((1.0 + total_tasks) / (1.0 + df))) + 1.0
+        
+        # TF-IDF
+        tfidf = tf * idf
+        
+        # 线性归一化到 [0, 1]
+        if normalize and tfidf.max() > 0:
+            tfidf = tfidf / tfidf.max()
+        
+        return tfidf
+    
+    @torch.no_grad()
+    def top_t(self, t: int, total_tasks: int = 1):
         """获取特异度最高的 t 个槽位"""
-        score = self.specificity()
+        score = self.specificity(total_tasks=total_tasks)
         return torch.topk(score, k=min(t, self.M)).indices
+    
+    def get_access_counts(self):
+        """获取访问计数"""
+        return self.tf_counts.clone()
+    
+    def get_stats(self):
+        """获取统计信息"""
+        spec = self.specificity(total_tasks=1, normalize=True)
+        return {
+            'total_accesses': int(self.tf_counts.sum().item()),
+            'unique_slots_accessed': int((self.tf_counts > 0).sum().item()),
+            'max_access': int(self.tf_counts.max().item()),
+            'spec_mean': float(spec.mean().item()),
+            'spec_std': float(spec.std().item()),
+            'spec_max': float(spec.max().item()),
+            'spec_min': float(spec.min().item()),
+        }
 
 
 def mask_kv_grads(kv_layer, device=None):
