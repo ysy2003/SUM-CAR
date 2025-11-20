@@ -2,7 +2,7 @@ import os, json
 import fire
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from ..memory.kv_memory import KVMemory
+from ..memory.kv_memory import KVMemoryLayer
 from ..models.base_model import MemoryAugmentedCausalLM
 from ..eval.gsm8k_eval import evaluate_gsm8k
 from ..eval.finqa_eval import evaluate_finqa_rc
@@ -10,10 +10,10 @@ from ..eval.humaneval_runner import evaluate_humaneval_pass1
 
 def _build_model_with_memory(base_model: str, mem_state: dict, k_top: int=32, alpha: float=1.0):
     d_model = AutoModelForCausalLM.from_pretrained(base_model).get_input_embeddings().weight.shape[1]
-    mem = KVMemory(num_slots=mem_state['keys'].shape[0], d_model=d_model, k_top=k_top, alpha=alpha)
+    mem = KVMemoryLayer(d_model=d_model, num_slots=mem_state['keys'].shape[0], k_top=k_top, alpha=alpha)
     with torch.no_grad():
-        mem.keys[:] = mem_state['keys']
-        mem.vals[:] = mem_state['vals']
+        mem.keys.data[:] = mem_state['keys']
+        mem.vals.data[:] = mem_state['vals']
     return MemoryAugmentedCausalLM(base_model, mem)
 
 def _load_merged(base_model: str, merged_dir: str):
@@ -23,7 +23,7 @@ def _load_merged(base_model: str, merged_dir: str):
 def _load_from_patch(base_model: str, patch_json: str, num_slots: int=65536, k_top: int=32, alpha: float=1.0):
     # initialize empty memory then apply patch rows to their slot ids
     d_model = AutoModelForCausalLM.from_pretrained(base_model).get_input_embeddings().weight.shape[1]
-    mem = KVMemory(num_slots=num_slots, d_model=d_model, k_top=k_top, alpha=alpha)
+    mem = KVMemoryLayer(d_model=d_model, num_slots=num_slots, k_top=k_top, alpha=alpha)
     patch = json.load(open(patch_json, 'r', encoding='utf-8'))
     mem.apply_patch(patch)
     return MemoryAugmentedCausalLM(base_model, mem)
