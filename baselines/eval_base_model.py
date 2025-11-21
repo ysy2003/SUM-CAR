@@ -1,0 +1,158 @@
+"""
+Evaluate GPT-2 base model (without memory) on three tasks.
+"""
+import os
+import json
+import fire
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from datasets import load_dataset
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from src.sumcar.eval.metrics import acc_numeric, em
+from src.sumcar.utils.sandbox import safe_exec
+
+
+@torch.no_grad()
+def eval_gsm8k(model, tokenizer, max_samples=None):
+    """Evaluate on GSM8K math problems."""
+    ds = load_dataset('gsm8k', 'main')['test']
+    if max_samples:
+        ds = ds.select(range(min(max_samples, len(ds))))
+    
+    total, correct = 0, 0
+    for ex in ds:
+        prompt = f"Solve the problem and give only the final numeric answer.\n\n{ex['question']}\n\nAnswer:"
+        enc = tokenizer(prompt, return_tensors='pt')
+        out_ids = model.generate(enc['input_ids'], max_new_tokens=64, do_sample=False)
+        pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
+        gold = ex['answer']
+        correct += acc_numeric(pred, gold)
+        total += 1
+        if total % 100 == 0:
+            print(f"  GSM8K: {total}/{len(ds)} processed, acc={correct/total:.4f}")
+    
+    return {'accuracy': correct/total, 'total': total}
+
+
+@torch.no_grad()
+def eval_humaneval(model, tokenizer, max_samples=None):
+    """Evaluate on HumanEval code generation."""
+    try:
+        ds = load_dataset('openai_humaneval')['test']
+    except:
+        ds = load_dataset('nuprl/humaneval')['test']
+    
+    if max_samples:
+        ds = ds.select(range(min(max_samples, len(ds))))
+    
+    total, correct = 0, 0
+    for ex in ds:
+        enc = tokenizer(ex['prompt'], return_tensors='pt')
+        out_ids = model.generate(enc['input_ids'], max_new_tokens=256, do_sample=False)
+        code = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
+        
+        # Run tests
+        test_code = ex.get('test', '')
+        res = safe_exec(code + "\n\n" + test_code)
+        ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
+        correct += 1 if ok else 0
+        total += 1
+        if total % 20 == 0:
+            print(f"  HumanEval: {total}/{len(ds)} processed, pass@1={correct/total:.4f}")
+    
+    return {'pass@1': correct/total, 'total': total}
+
+
+@torch.no_grad()
+def eval_finqa(model, tokenizer, max_samples=None):
+    """Evaluate on FinQA financial QA."""
+    from src.sumcar.data.finqa_rc import load as load_finqa
+    ds = load_finqa(split='dev', use_rc_filter=False)
+    
+    if max_samples:
+        ds = ds[:max_samples]
+    
+    total, correct = 0, 0
+    skipped = 0
+    for ex in ds:
+        ctx = ex.get('context', '')
+        q = ex.get('question', '')
+        gold = ex.get('answer', '')
+        prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
+        enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960)
+        
+        try:
+            out_ids = model.generate(enc['input_ids'], max_new_tokens=64, do_sample=False)
+            pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
+            correct += em(pred, gold)
+            total += 1
+        except Exception as e:
+            skipped += 1
+            continue
+        
+        if total % 100 == 0:
+            print(f"  FinQA: {total} processed, em={correct/total:.4f}")
+    
+    return {'em': correct/total if total > 0 else 0.0, 'total': total, 'skipped': skipped}
+
+
+def main(base_model='gpt2', 
+         out='baselines/base_model_results.json',
+         max_samples=None):
+    """
+    Evaluate base GPT-2 model on three tasks.
+    
+    Args:
+        base_model: Model name (default: gpt2)
+        out: Output JSON file path
+        max_samples: Maximum samples per task (None = use all)
+    """
+    print(f"=== Evaluating Base Model: {base_model} ===")
+    if max_samples:
+        print(f"Using max {max_samples} samples per task")
+    print()
+    
+    # Load model
+    print("Loading model...")
+    model = AutoModelForCausalLM.from_pretrained(base_model)
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model.eval()
+    print()
+    
+    # Evaluate on three tasks
+    results = {}
+    
+    print("Evaluating GSM8K (Math)...")
+    results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples)
+    print(f"  ✓ GSM8K Accuracy: {results['gsm8k']['accuracy']:.4f}")
+    print()
+    
+    print("Evaluating HumanEval (Code)...")
+    results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
+    print(f"  ✓ HumanEval Pass@1: {results['humaneval']['pass@1']:.4f}")
+    print()
+    
+    print("Evaluating FinQA (Finance)...")
+    results['finqa'] = eval_finqa(model, tokenizer, max_samples)
+    print(f"  ✓ FinQA EM: {results['finqa']['em']:.4f}")
+    print()
+    
+    # Save results
+    os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+    with open(out, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    print(f"Results saved to: {out}")
+    print()
+    print("Summary:")
+    print(f"  GSM8K Accuracy:    {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['total']} samples)")
+    print(f"  HumanEval Pass@1:  {results['humaneval']['pass@1']:.4f} ({results['humaneval']['total']} samples)")
+    print(f"  FinQA EM:          {results['finqa']['em']:.4f} ({results['finqa']['total']} samples)")
+
+
+if __name__ == '__main__':
+    fire.Fire(main)

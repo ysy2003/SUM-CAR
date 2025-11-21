@@ -16,9 +16,9 @@ def _build_model_with_memory(base_model: str, mem_state: dict, k_top: int=32, al
         mem.vals.data[:] = mem_state['vals']
     return MemoryAugmentedCausalLM(base_model, mem)
 
-def _load_merged(base_model: str, merged_dir: str):
+def _load_merged(base_model: str, merged_dir: str, k_top: int=4, alpha: float=1.0):
     state = torch.load(os.path.join(merged_dir, 'memory.pt'), map_location='cpu')
-    return _build_model_with_memory(base_model, state)
+    return _build_model_with_memory(base_model, state, k_top=k_top, alpha=alpha)
 
 def _load_from_patch(base_model: str, patch_json: str, num_slots: int=65536, k_top: int=32, alpha: float=1.0):
     # initialize empty memory then apply patch rows to their slot ids
@@ -32,7 +32,9 @@ def main(base_model: str='gpt2',
          merged: str=None,
          patch: str=None,
          out: str='out/eval_single.json',
-         max_new_tokens: int=128):
+         max_new_tokens: int=128,
+         k_top: int=4,
+         alpha: float=1.0):
     """Evaluate either a merged model (preferred) or a single patch model.
 
     One of --merged or --patch must be provided.
@@ -40,9 +42,9 @@ def main(base_model: str='gpt2',
     assert (merged is not None) ^ (patch is not None), "Provide exactly one of --merged or --patch"
 
     if merged:
-        model = _load_merged(base_model, merged)
+        model = _load_merged(base_model, merged, k_top=k_top, alpha=alpha)
     else:
-        model = _load_from_patch(base_model, patch)
+        model = _load_from_patch(base_model, patch, k_top=k_top, alpha=alpha)
 
     # Run the three single-task suites
     res = {

@@ -7,7 +7,7 @@ import math
 
 
 def sumcar_merge(memory, patches: List[Dict], use_tfidf_scoring: bool = True, 
-                 use_capacity_budgeting: bool = True) -> Dict:
+                 use_capacity_budgeting: bool = True, verbose: bool = False) -> Dict:
     """
     SUM-CAR 合并算法：冲突感知的重映射
     
@@ -22,11 +22,20 @@ def sumcar_merge(memory, patches: List[Dict], use_tfidf_scoring: bool = True,
                 以及可选的 'task', 'specificity', 'idf_df_counts' 元信息
         use_tfidf_scoring: 是否使用 TF-IDF 打分（默认 True）
         use_capacity_budgeting: 是否使用配额分配（默认 True）
+        verbose: 是否输出详细日志
     
     返回:
-        包含 'remap' 和 'final_num_slots' 的字典
+        包含 'remap'、'final_num_slots' 和 'conflict_stats' 的字典
     """
     num_tasks = len(patches)
+    
+    # 统计信息
+    conflict_stats = {
+        'total_conflicts': 0,
+        'conflicts_resolved_by_tfidf': 0,
+        'high_specificity_winners': 0,
+        'hub_slots_avoided': 0,
+    }
     
     # 配额分配（如果启用）
     if use_capacity_budgeting and num_tasks > 0:
@@ -48,12 +57,13 @@ def sumcar_merge(memory, patches: List[Dict], use_tfidf_scoring: bool = True,
     sid_map = {}
     for i, p in enumerate(patches):
         specificities = p.get('specificity', [1.0] * len(p['slot_ids']))
-        idf_df = p.get('idf_df_counts', [0] * len(p['slot_ids']))
+        idf_df_counts = p.get('idf_df_counts', {})  # 注意：这是字典 {slot_id: df_count}
         
         for j, sid in enumerate(p['slot_ids']):
             acc = p['access_counts'][j]
             spec = specificities[j] if j < len(specificities) else 1.0
-            df = idf_df[j] if j < len(idf_df) else 0
+            # 从 idf_df_counts 字典中获取该槽位的 df 值
+            df = idf_df_counts.get(sid, 0) if isinstance(idf_df_counts, dict) else 0
             sid_map.setdefault(sid, []).append((i, acc, spec, df))
     
     # 处理每个槽位
@@ -75,8 +85,27 @@ def sumcar_merge(memory, patches: List[Dict], use_tfidf_scoring: bool = True,
                     free_ptr += 1
         else:
             # 有冲突：使用 TF-IDF 打分选择胜者
+            conflict_stats['total_conflicts'] += 1
+            
             if use_tfidf_scoring:
-                winner_idx = _select_winner_tfidf(lst, patches, num_tasks)
+                winner_idx = _select_winner_tfidf(lst, patches, num_tasks, verbose=verbose)
+                conflict_stats['conflicts_resolved_by_tfidf'] += 1
+                
+                # 统计高特异性胜者
+                win_spec = lst[winner_idx][2]
+                if win_spec > 0.7:
+                    conflict_stats['high_specificity_winners'] += 1
+                
+                # 统计避免的hub槽
+                win_df = lst[winner_idx][3]
+                if win_df == num_tasks:
+                    # 虽然是hub，但还是被选中了（说明其他候选更差）
+                    pass
+                else:
+                    # 成功避免hub槽
+                    has_hub = any(df == num_tasks for _, _, _, df in lst)
+                    if has_hub:
+                        conflict_stats['hub_slots_avoided'] += 1
             else:
                 # 回退到原始策略：按访问计数
                 winner_idx = max(range(len(lst)), key=lambda x: lst[x][1])
@@ -103,7 +132,19 @@ def sumcar_merge(memory, patches: List[Dict], use_tfidf_scoring: bool = True,
                     remap[(task, sid)] = free_ptr
                     free_ptr += 1
     
-    return {'remap': remap, 'final_num_slots': memory.num_slots}
+    # 添加统计信息到返回值
+    if verbose:
+        print(f"\n=== Merge Statistics ===")
+        print(f"Total conflicts: {conflict_stats['total_conflicts']}")
+        print(f"Resolved by TF-IDF: {conflict_stats['conflicts_resolved_by_tfidf']}")
+        print(f"High-specificity winners (>0.7): {conflict_stats['high_specificity_winners']}")
+        print(f"Hub slots avoided: {conflict_stats['hub_slots_avoided']}")
+    
+    return {
+        'remap': remap, 
+        'final_num_slots': memory.num_slots,
+        'conflict_stats': conflict_stats
+    }
 
 
 def _allocate_capacity(patches: List[Dict], total_slots: int) -> Dict[str, int]:
@@ -164,35 +205,54 @@ def _within_budget(task: str, budget: Dict[str, int], remap: Dict) -> bool:
     return used < budget[task]
 
 
-def _select_winner_tfidf(candidates: List[Tuple], patches: List[Dict], num_tasks: int) -> int:
+def _select_winner_tfidf(candidates: List[Tuple], patches: List[Dict], num_tasks: int, verbose: bool = False) -> int:
     """
-    使用 TF-IDF 打分选择胜者
+    使用升级版 TF-IDF 打分选择胜者
+    
+    策略：特异度优先 + 访问数兜底 + Hub惩罚
+    - beta: 特异度权重（1.2 = 偏向高特异性）
+    - gamma: 访问数权重（0.2 = 轻微考虑频率）
+    - hub_penalty: 对跨任务通用槽降权（0.8）
     
     参数:
         candidates: [(patch_idx, acc_count, specificity, df), ...]
         patches: patch 列表
-        num_tasks: 任务总数
+        num_tasks: 任务总数 T
     
     返回:
         胜者在 candidates 中的索引
     """
-    beta, gamma = 1.2, 0.2  # beta 偏向特异性，gamma 偏向频率
+    beta, gamma = 1.2, 0.2      # 特异度权重 / 访问数权重
+    hub_penalty = 0.8            # 对 df==T 的"通用槽"降权
     
     scores = []
-    max_acc = max(acc for _, acc, _, _ in candidates)
+    max_acc = max(acc for _, acc, _, _ in candidates) or 1.0
     
     for i, (patch_idx, acc, spec, df) in enumerate(candidates):
-        # 基础分数：特异性 ^ beta * (访问频率 ^ gamma)
-        score = (spec ** beta) * ((acc / (max_acc or 1.0)) ** gamma)
+        # 核心打分公式：(特异度^beta) * (归一化访问数^gamma)
+        # - spec^beta: 强调高特异性槽位（任务专属）
+        # - (acc/max_acc)^gamma: 轻微考虑访问频率（避免冷门槽垄断）
+        score = (spec ** beta) * ((acc / max_acc) ** gamma)
         
-        # Hub 惩罚：跨任务通用槽（df == T）降低优先级
+        # Hub 惩罚：df==T 说明该槽被所有任务使用，是"通用槽"而非"专属槽"
+        # 降低其优先级，鼓励任务使用各自的特异槽位，减少跨任务干扰
         if df == num_tasks:
-            score *= 0.8
+            score *= hub_penalty
         
         scores.append(score)
     
     # 返回得分最高的索引
-    return max(range(len(scores)), key=lambda i: scores[i])
+    winner_idx = max(range(len(scores)), key=lambda i: scores[i])
+    
+    # Debug 信息（详细模式）
+    if verbose and len(candidates) > 1:
+        print(f'  Conflict: {len(candidates)} tasks compete for same slot')
+        for i, (patch_idx, acc, spec, df) in enumerate(candidates):
+            task_name = patches[patch_idx].get('task', f't{patch_idx}')
+            marker = '→ WINNER' if i == winner_idx else ''
+            print(f'    {task_name}: spec={spec:.3f}, acc={acc}, df={df}, score={scores[i]:.4f} {marker}')
+    
+    return winner_idx
 
 
 def _apply_one(memory, src_sid: int, patch: Dict, dst_sid: int):

@@ -135,6 +135,18 @@ class SparseFinetuner:
         self.mem.disable_access_logging()
         total_accesses = int(self.mem.acc_counts.sum().item())
         self.logger.log(f'Probe done; counted {total_accesses} accesses')
+        
+        # 将 mem.acc_counts 同步到 spec_tracker（因为 track_hits 可能被禁用）
+        if total_accesses > 0:
+            # 找出所有被访问的槽位
+            accessed_slots = (self.mem.acc_counts > 0).nonzero(as_tuple=True)[0]
+            if len(accessed_slots) > 0:
+                # 模拟 hits 格式：重复每个槽位ID access_count 次
+                # 但为了效率，我们直接更新 tf_counts
+                for slot_id in accessed_slots:
+                    count = int(self.mem.acc_counts[slot_id].item())
+                    self.spec_tracker.tf_counts[slot_id] = count
+                self.logger.log(f'Synced {len(accessed_slots)} accessed slots to spec_tracker')
     
     def train(self, dl: DataLoader, epochs: int = 1, device: str = None, refresh_every: int = 200):
         """
@@ -205,6 +217,12 @@ class SparseFinetuner:
                     hits = self.mem.pop_last_hits()
                     if hits is not None:
                         self.spec_tracker.update_from_hits(hits)
+                    else:
+                        # 如果 hits 不可用（track_hits=false），从 acc_counts 同步
+                        accessed_slots = (self.mem.acc_counts > 0).nonzero(as_tuple=True)[0]
+                        for slot_id in accessed_slots:
+                            count = int(self.mem.acc_counts[slot_id].item())
+                            self.spec_tracker.tf_counts[slot_id] = count
                     
                     if self.use_xla:
                         xm.mark_step()  # CPU 统计不进 XLA 图
