@@ -1,0 +1,119 @@
+{
+  "gsm8k": {
+    "accuracy": 0.2,
+    "total": 5,
+    "predictions": [
+      {
+        "question": "Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?",
+        "prediction": " Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?\n\nLet's start with the number of eggs she lays. She lays 16 eggs per day. So, she lays 16 eggs per day. Let's call that number of eggs x. So, x is the number of eggs she lays per day. So, x is the number of eggs she lays per day. So",
+        "gold": "Janet sells 16 - 3 - 4 = <<16-3-4=9>>9 duck eggs a day.\nShe makes 9 * 2 = $<<9*2=18>>18 every day at the farmer\u2019s market.\n#### 18",
+        "correct": false
+      },
+      {
+        "question": "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
+        "prediction": " 2 bolts of blue fiber and half that much white fiber.  What does that mean?  Well, half that much means half of 2 bolts of blue fiber.  So, half of 2 bolts of blue fiber is 1 bolt of blue fiber.  So, we have 2 bolts of blue fiber and 1 bolt of white fiber.  So, we have 3 bolts of fiber in total.  So, the answer is 3 bolts of fiber in total.\n\nLet's solve this step by step.\n\nQuestion: A robe takes 2 bolts of blue fiber and half that much white fiber.  How",
+        "gold": "It takes 2/2=<<2/2=1>>1 bolt of white fiber\nSo the total amount of fabric is 2+1=<<2+1=3>>3 bolts of fabric\n#### 3",
+        "correct": false
+      },
+      {
+        "question": "Josh decides to try flipping a house.  He buys a house for $80,000 and then puts in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?",
+        "prediction": "  Josh bought the house for $80,000.  He put in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?\n\nLet's start with the value of the house.  We know that Josh bought the house for $80,000.  We also know that he put in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?\n\nLet's start with the value of the house.  We know that Josh bought the house for $80,000.  We also",
+        "gold": "The cost of the house and repairs came out to 80,000+50,000=$<<80000+50000=130000>>130,000\nHe increased the value of the house by 80,000*1.5=<<80000*1.5=120000>>120,000\nSo the new value of the house is 120,000+80,000=$<<120000+80000=200000>>200,000\nSo he made a profit of 200,000-130,000=$<<200000-130000=70000>>70,000\n#### 70000",
+        "correct": false
+      },
+      {
+        "question": "James decides to run 3 sprints 3 times a week.  He runs 60 meters each sprint.  How many total meters does he run a week?",
+        "prediction": "  James runs 3 sprints 3 times a week.  That means he runs 3 sprints 3 times 3 times a week.  That's 3 times 3 times 3 sprints.  That's 3 times 3 times 3 times 60 meters.  That's 3 times 3 times 3 times 60 meters.  That's 3 times 3 times 3 times 60 meters.  That's 3 times 3 times 3 times 60 meters.  That's 3 times 3 times 3 times 60 meters.  That's",
+        "gold": "He sprints 3*3=<<3*3=9>>9 times\nSo he runs 9*60=<<9*60=540>>540 meters\n#### 540",
+        "correct": false
+      },
+      {
+        "question": "Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy.  She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed.  In the afternoon, she gives her chickens another 25 cups of feed.  How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi's flock is 20 chickens?",
+        "prediction": "  Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy.  She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed.  In the afternoon, she gives her chickens another 25 cups of feed.  How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi's flock is 20 chickens?\n\nLet's start with the first sentence:  Wendi feeds each of her chickens three cups of mixed chicken feed",
+        "gold": "If each chicken eats 3 cups of feed per day, then for 20 chickens they would need 3*20=<<3*20=60>>60 cups of feed per day.\nIf she feeds the flock 15 cups of feed in the morning, and 25 cups in the afternoon, then the final meal would require 60-15-25=<<60-15-25=20>>20 cups of chicken feed.\n#### 20",
+        "correct": true
+      }
+    ]
+  },
+  "humaneval": {
+    "pass@1": 0.0,
+    "total": 5,
+    "predictions": [
+      {
+        "prompt": "from typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n",
+        "generated_code": "    for i in range(len(numbers)):\n        for j in range(i + 1, len(numbers)):\n            if abs(numbers[i] - numbers[j]) < threshold:\n                return True\n    return False\n",
+        "passed": false,
+        "error": "Traceback (most recent call last):\n  File \"/root/SUM-CAR/baselines/../src/sumcar/utils/sandbox.py\", line 17, in _run\n    exec(code, ns, ns)\n  File \"<string>\", line 1\n    for i in range(len(numbers)):\nIndentationError: unexpected indent\n"
+      },
+      {
+        "prompt": "from typing import List\n\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n",
+        "generated_code": "    return [paren_string[i:j] for i, j in zip([0] + [i for i, c in enumerate(paren_string) if c == '('], [i for i, c in enumerate(paren_string) if c == ')'])]\n",
+        "passed": false,
+        "error": "Traceback (most recent call last):\n  File \"/root/SUM-CAR/baselines/../src/sumcar/utils/sandbox.py\", line 17, in _run\n    exec(code, ns, ns)\n  File \"<string>\", line 1\n    return [paren_string[i:j] for i, j in zip([0] + [i for i, c in enumerate(paren_string) if c == '('], [i for i, c in enumerate(paren_string) if c == ')'])]\nIndentationError: unexpected indent\n"
+      },
+      {
+        "prompt": "\n\ndef truncate_number(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number(3.5)\n    0.5\n    \"\"\"\n",
+        "generated_code": "    return number - int(number)\n\n\ndef truncate_number_to_n_digits(number: float, n: int) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number_to_n_digits(3.5, 1)\n    0.5\n    \"\"\"\n    return truncate_number(number) * 10 ** n\n\n\ndef truncate_number_to_n_digits_and_round(number: float, n: int) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number_to_n_digits_and_round(3.5, 1)\n    0.5\n    \"\"\"\n    return truncate_number_to_n_digits(number, n) * 10 ** n\n\n\ndef truncate_number_to_n_digits_and_round_to_n(number: float, n: int) -> float:\n    \"\"\" Given a positive floating point number, it can",
+        "passed": false,
+        "error": "Traceback (most recent call last):\n  File \"/root/SUM-CAR/baselines/../src/sumcar/utils/sandbox.py\", line 17, in _run\n    exec(code, ns, ns)\n  File \"<string>\", line 1\n    return number - int(number)\nIndentationError: unexpected indent\n"
+      },
+      {
+        "prompt": "from typing import List\n\n\ndef below_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero([1, 2, 3])\n    False\n    >>> below_zero([1, 2, -4, 5])\n    True\n    \"\"\"\n",
+        "generated_code": "    balance = 0\n    for operation in operations:\n        balance += operation\n        if balance < 0:\n            return True\n    return False\n",
+        "passed": false,
+        "error": "Traceback (most recent call last):\n  File \"/root/SUM-CAR/baselines/../src/sumcar/utils/sandbox.py\", line 17, in _run\n    exec(code, ns, ns)\n  File \"<string>\", line 1\n    balance = 0\nIndentationError: unexpected indent\n"
+      },
+      {
+        "prompt": "from typing import List\n\n\ndef mean_absolute_deviation(numbers: List[float]) -> float:\n    \"\"\" For a given list of input numbers, calculate Mean Absolute Deviation\n    around the mean of this dataset.\n    Mean Absolute Deviation is the average absolute difference between each\n    element and a centerpoint (mean in this case):\n    MAD = average | x - x_mean |\n    >>> mean_absolute_deviation([1.0, 2.0, 3.0, 4.0])\n    1.0\n    \"\"\"\n",
+        "generated_code": "    mean = sum(numbers) / len(numbers)\n    return sum(abs(x - mean) for x in numbers) / len(numbers)\n",
+        "passed": false,
+        "error": "Traceback (most recent call last):\n  File \"/root/SUM-CAR/baselines/../src/sumcar/utils/sandbox.py\", line 17, in _run\n    exec(code, ns, ns)\n  File \"<string>\", line 1\n    mean = sum(numbers) / len(numbers)\nIndentationError: unexpected indent\n"
+      }
+    ]
+  },
+  "finqa": {
+    "em": 0.0,
+    "total": 5,
+    "skipped": 0,
+    "predictions": [
+      {
+        "question": "what is the average payment volume per transaction for american express?",
+        "context": "[PRE]\nlargest operators of open-loop and closed-loop retail electronic payments networks the largest operators of open-loop and closed-loop retail electronic payments networks are visa , mastercard , ...",
+        "prediction": "1. The table shows the payment volume for each company.\n2. The table shows the total number of transactions for each company.\n3. The table does not show the average payment volume per transaction for each company.\n4. The table does not show the average payment volume per transaction for american express.\n5. The table does not show the average payment volume per transaction for visa.\n6. The table does not show the average payment volume per transaction for mastercard.\n7. The table does not show the average payment volume per transaction for discover.\n8. The table does not show the average payment volume per transaction for jcb.\n9.",
+        "gold": "127.40",
+        "correct": false
+      },
+      {
+        "question": "what was the percentage cumulative total return for the five year period ended 31-dec-2017 of citi common stock?",
+        "context": "[PRE]\nperformance graph comparison of five-year cumulative total return the following graph and table compare the cumulative total return on citi 2019s common stock , which is listed on the nyse under...",
+        "prediction": "1. The question is asking for the percentage cumulative total return for the five year period ended 31-dec-2017 of citi common stock.\n2. The table shows the cumulative total return for the five year period ended 31-dec-2017 of citi common stock.\n3. The percentage cumulative total return for the five year period ended 31-dec-2017 of citi common stock is the cumulative total return for the five year period ended 31-dec-2017 of citi common stock divided by the cumulative total return for the five year period ended 31-dec-2017 of cit",
+        "gold": "93.5%",
+        "correct": false
+      },
+      {
+        "question": "what percentage of the total oil and gas mmboe comes from canada?",
+        "context": "[PRE]\nthe acquisition date is on or after the beginning of the first annual reporting period beginning on or after december 15 , 2008 . we will evaluate how the new requirements of statement no . 141 ...",
+        "prediction": "66 + 894 + 28 = 988\n60/988 = 0.061\n0.061 * 100 = 6.1%\n6.1% of the total oil and gas mmboe comes from canada.\n\nQuestion: what percentage of the total oil and gas mmboe comes from the u.s. offshore?\n20/243 = 0.082\n0.082 * 100 = 8.2%\n8.2% of the total oil and gas mmboe comes from the u.s. offshore.\n\nQuestion: what percentage of the total oil and gas mmboe comes from the",
+        "gold": "24.69%",
+        "correct": false
+      },
+      {
+        "question": "in 2010 what was the net change in net revenue in millions",
+        "context": "[PRE]\nentergy mississippi , inc . management 2019s financial discussion and analysis 2010 compared to 2009 net revenue consists of operating revenues net of : 1 ) fuel , fuel-related expenses , and ga...",
+        "prediction": "1. Net revenue is the sum of operating revenues, net of fuel, fuel-related expenses, purchased power expenses, and other regulatory charges (credits).\n2. The table shows that net revenue increased by $18.6 million from 2009 to 2010.\n3. The table also shows that the volume/weather variance is $18.9 million.\n4. The table also shows that other is $0.3 million.\n5. Therefore, the net change in net revenue in millions is $18.6 million - $18.9 million - $0.3 million = -$0.6 million.\n\nQuestion: in ",
+        "gold": "18.6",
+        "correct": false
+      },
+      {
+        "question": "what are the deferred fuel cost revisions as a percentage of the increase in fuel cost recovery revenues?",
+        "context": "[PRE]\nentergy louisiana , inc . management's financial discussion and analysis gross operating revenues , fuel and purchased power expenses , and other regulatory credits gross operating revenues incr...",
+        "prediction": "The deferred fuel cost revisions variance resulted from a revised unbilled sales pricing estimate made in december 2002 and a further revision made in the first quarter of 2003 to more closely align the fuel component of that pricing with expected recoverable fuel costs. the asset retirement obligation variance was due to the implementation of sfas 143, \"accounting for asset retirement obligations\" adopted in january 2003. see \"critical accounting estimates\" for more details on sfas 143. the increase was offset by decommissioning expense and had no effect on net income. the volume variance was due to a decrease in electricity usage in the",
+        "gold": "60.3%",
+        "correct": false
+      }
+    ]
+  },
+  "config": {
+    "use_cot": true
+  }
+}

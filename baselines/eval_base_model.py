@@ -7,6 +7,7 @@ import fire
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
+from tqdm import tqdm
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -25,34 +26,39 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
     predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"  Using {prompt_type} prompting")
-    for ex in ds:
+    for ex in tqdm(ds, desc="GSM8K", unit="problems"):
         if use_cot:
             prompt = f"Let's solve this step by step.\n\nQuestion: {ex['question']}\n\nLet me think through this carefully:"
         else:
             prompt = f"Solve the problem and give only the final numeric answer.\n\n{ex['question']}\n\nAnswer:"
         enc = tokenizer(prompt, return_tensors='pt')
-        max_tokens = 128 if use_cot else 64
-        out_ids = model.generate(enc['input_ids'], max_new_tokens=max_tokens, do_sample=False)
+        # High limit - let model finish naturally with EOS token
+        max_tokens = 2048 if use_cot else 512
+        out_ids = model.generate(
+            enc['input_ids'],
+            max_new_tokens=max_tokens,
+            do_sample=False,
+            eos_token_id=tokenizer.eos_token_id,  # Stop at EOS
+            pad_token_id=tokenizer.pad_token_id
+        )
         pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
         gold = ex['answer']
         is_correct = acc_numeric(pred, gold)
         correct += is_correct
         total += 1
-        
+
+        # Check if generation was truncated
+        generated_length = len(out_ids[0]) - len(enc['input_ids'][0])
+        was_truncated = generated_length >= max_tokens
+
         predictions.append({
             'question': ex['question'],
             'prediction': pred,
             'gold': gold,
-            'correct': bool(is_correct)
+            'correct': bool(is_correct),
+            'generated_tokens': int(generated_length),
+            'was_truncated': bool(was_truncated)
         })
-        
-        if total <= 3:
-            print(f"    Example {total}: {'✓' if is_correct else '✗'}")
-            print(f"      Q: {ex['question'][:60]}...")
-            print(f"      Pred: {pred[:100]}")
-            print(f"      Gold: {gold[:60]}")
-        if total % 100 == 0:
-            print(f"  GSM8K: {total}/{len(ds)} processed, acc={correct/total:.4f}")
     
     return {'accuracy': correct/total, 'total': total, 'predictions': predictions}
 
@@ -70,14 +76,24 @@ def eval_humaneval(model, tokenizer, max_samples=None):
     
     total, correct = 0, 0
     predictions = []
-    for ex in ds:
+    for ex in tqdm(ds, desc="HumanEval", unit="problems"):
         enc = tokenizer(ex['prompt'], return_tensors='pt')
-        out_ids = model.generate(enc['input_ids'], max_new_tokens=256, do_sample=False)
+        # High limit for code generation - let model finish naturally
+        out_ids = model.generate(
+            enc['input_ids'],
+            max_new_tokens=1024,  # Generous limit for complex functions
+            do_sample=False,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id
+        )
         code = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
-        
+
+        # Combine prompt (function signature) with generated code (function body)
+        full_code = ex['prompt'] + code
+
         # Run tests
         test_code = ex.get('test', '')
-        res = safe_exec(code + "\n\n" + test_code)
+        res = safe_exec(full_code + "\n\n" + test_code)
         ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
         correct += 1 if ok else 0
         total += 1
@@ -85,15 +101,10 @@ def eval_humaneval(model, tokenizer, max_samples=None):
         predictions.append({
             'prompt': ex['prompt'],
             'generated_code': code,
+            'full_code': full_code,  # Include complete executable code
             'passed': bool(ok),
             'error': res.error if not ok else None
         })
-        
-        if total <= 3:
-            print(f"    Example {total}: {'✓' if ok else '✗'}")
-            print(f"      Generated: {code[:100]}...")
-        if total % 20 == 0:
-            print(f"  HumanEval: {total}/{len(ds)} processed, pass@1={correct/total:.4f}")
     
     return {'pass@1': correct/total, 'total': total, 'predictions': predictions}
 
@@ -115,7 +126,7 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
     predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"  Using {prompt_type} prompting")
-    for ex in ds:
+    for ex in tqdm(ds, desc="FinQA", unit="questions"):
         ctx = ex['context'] if 'context' in ex else ex.get('context', '')
         q = ex['question'] if 'question' in ex else ex.get('question', '')
         gold = ex['answer'] if 'answer' in ex else ex.get('answer', '')
@@ -126,8 +137,15 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
         enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960)
         
         try:
-            max_tokens = 128 if use_cot else 64
-            out_ids = model.generate(enc['input_ids'], max_new_tokens=max_tokens, do_sample=False)
+            # High limit - let model finish naturally with EOS token
+            max_tokens = 2048 if use_cot else 512
+            out_ids = model.generate(
+                enc['input_ids'],
+                max_new_tokens=max_tokens,
+                do_sample=False,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id
+            )
             pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
             is_correct = em(pred, gold)
             correct += is_correct
@@ -140,40 +158,32 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
                 'gold': gold,
                 'correct': bool(is_correct)
             })
-            
-            if total <= 3:
-                print(f"    Example {total}: {'✓' if is_correct else '✗'}")
-                print(f"      Q: {q[:60]}...")
-                print(f"      Pred: {pred[:100]}")
-                print(f"      Gold: {gold}")
         except Exception as e:
             skipped += 1
             continue
-        
-        if total % 100 == 0:
-            print(f"  FinQA: {total} processed, em={correct/total:.4f}")
     
     return {'em': correct/total if total > 0 else 0.0, 'total': total, 'skipped': skipped, 'predictions': predictions}
 
 
-def main(base_model='gpt2', 
+def main(base_model='gpt2',
          out='baselines/base_model_results.json',
          max_samples=None,
          use_cot=False):
     """
     Evaluate base GPT-2 model on three tasks.
-    
+
     Args:
         base_model: Model name (default: gpt2)
         out: Output JSON file path
         max_samples: Maximum samples per task (None = use all)
         use_cot: Use Chain-of-Thought prompting (default: False)
     """
-    print(f"=== Evaluating Base Model: {base_model} ===")
-    if max_samples:
-        print(f"Using max {max_samples} samples per task")
-    print()
-    
+    # Silence transformers warnings
+    import warnings
+    warnings.filterwarnings('ignore')
+    import logging
+    logging.getLogger('transformers').setLevel(logging.ERROR)
+
     # Load model
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(base_model)
