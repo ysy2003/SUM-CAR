@@ -10,10 +10,33 @@ echo ""
 
 cd "$(dirname "$0")/.."
 
+# Parse command line arguments
+USE_COT=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --use_cot)
+            USE_COT=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 # Run full evaluation
-python baselines/eval_base_model.py \
-    --base_model gpt2 \
-    --out baselines/base_model_results.json
+if [ "$USE_COT" = true ]; then
+    echo "Using Chain-of-Thought prompting"
+    python baselines/eval_base_model.py \
+        --base_model gpt2 \
+        --out baselines/base_model_results_cot.json \
+        --use_cot
+else
+    echo "Using normal prompting"
+    python baselines/eval_base_model.py \
+        --base_model gpt2 \
+        --out baselines/base_model_results.json
+fi
 
 echo ""
 echo "========================================"
