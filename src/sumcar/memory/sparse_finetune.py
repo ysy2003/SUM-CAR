@@ -183,6 +183,9 @@ class SparseFinetuner:
         total_steps = steps_per_epoch * epochs
         sch = get_linear_schedule_with_warmup(opt, 0, total_steps)
         
+        # Loss历史记录
+        loss_history = []
+        
         step = 0
         for ep in range(epochs):
             for batch in dl:
@@ -190,6 +193,13 @@ class SparseFinetuner:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
                 loss = out.loss
+                
+                # 记录loss
+                loss_history.append({
+                    'step': step,
+                    'epoch': ep + 1,
+                    'loss': loss.item()
+                })
                 
                 loss.backward()
                 
@@ -234,8 +244,10 @@ class SparseFinetuner:
                     self.logger.log(f'[step {step}] refresh Top-t={len(top_slots)}; loss={loss.item():.4f}')
             
             self.logger.log(f'Epoch {ep + 1}/{epochs} done')
+        
+        return loss_history
     
-    def build_patch(self, task: str, top_t: int, out_dir: str, train_stats: Dict = None, use_ckpt_manager: bool = True) -> Dict:
+    def build_patch(self, task: str, top_t: int, out_dir: str, train_stats: Dict = None, use_ckpt_manager: bool = True, loss_history: list = None) -> Dict:
         """
         构建并保存任务 patch（使用特异度分数）
         
@@ -344,6 +356,19 @@ class SparseFinetuner:
             # IDF 信息（用于重现实验）
             'idf_df_counts': self.spec_tracker.idf_df_counts,
         }
+        
+        # 添加loss历史
+        if loss_history:
+            meta['loss_history'] = loss_history
+            # 计算loss统计
+            losses = [x['loss'] for x in loss_history]
+            meta['loss_stats'] = {
+                'initial': losses[0] if losses else None,
+                'final': losses[-1] if losses else None,
+                'min': min(losses) if losses else None,
+                'max': max(losses) if losses else None,
+                'mean': sum(losses) / len(losses) if losses else None,
+            }
         
         # 合并训练统计
         if train_stats:

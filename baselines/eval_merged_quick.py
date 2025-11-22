@@ -80,6 +80,10 @@ def eval_humaneval(model, tokenizer, max_samples=20):
         total += 1
         if i < 3:
             print(f"    Example {i+1}: {'✓' if ok else '✗'}")
+            print(f"      Prompt: {ex['prompt'][:60]}...")
+            print(f"      Generated: {code[:100]}...")
+            if not ok:
+                print(f"      Error: {res.error[:100] if res.error else 'Test failed'}")
     
     return {'pass@1': correct/total, 'total': total, 'correct': correct}
 
@@ -89,15 +93,19 @@ def eval_finqa(model, tokenizer, max_samples=20):
     """Quick eval on FinQA."""
     from src.sumcar.data.finqa_rc import load as load_finqa
     ds = load_finqa(split='dev', use_rc_filter=False)
-    ds = ds[:min(max_samples, len(ds))]
+    # Select samples (handle Dataset object)
+    if hasattr(ds, 'select'):
+        ds = ds.select(range(min(max_samples, len(ds))))
+    else:
+        ds = ds[:min(max_samples, len(ds))]
     
     total, correct = 0, 0
     skipped = 0
     print(f"\n  Testing {len(ds)} FinQA samples...")
     for i, ex in enumerate(ds):
-        ctx = ex.get('context', '')
-        q = ex.get('question', '')
-        gold = ex.get('answer', '')
+        ctx = ex['context'] if 'context' in ex else ex.get('context', '')
+        q = ex['question'] if 'question' in ex else ex.get('question', '')
+        gold = ex['answer'] if 'answer' in ex else ex.get('answer', '')
         prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
         enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960)
         
@@ -109,7 +117,9 @@ def eval_finqa(model, tokenizer, max_samples=20):
             total += 1
             if i < 3:
                 print(f"    Example {i+1}: {'✓' if is_correct else '✗'}")
-                print(f"      Pred: {pred[:50]}")
+                print(f"      Q: {q[:60]}...")
+                print(f"      Pred: {pred[:100]}")
+                print(f"      Gold: {gold}")
                 print(f"      Gold: {gold[:50]}")
         except Exception as e:
             skipped += 1

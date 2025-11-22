@@ -9,7 +9,18 @@ import urllib.request
 
 _SPLIT_MAP = {"train": "train", "dev": "dev", "test": "test"}
 
+# 原始prompt
 _DEF_INST = "Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
+
+# CoT prompt
+_COT_INST = """Answer the question using ONLY the given context. Think step by step.
+
+Context:
+{ctx}
+
+Question: {q}
+
+Let me analyze this step by step:"""
 
 def _table_to_tsv(table_2d):
     """Convert 2D table (List[List[str]]) to TSV format"""
@@ -25,7 +36,7 @@ def _build_context(item: Dict) -> str:
     table = _table_to_tsv(item.get("table", []))
     return f"[PRE]\n{pre}\n\n[TABLE]\n{table}\n\n[POST]\n{post}"
 
-def _format_example(item: Dict) -> Dict:
+def _format_example(item: Dict, use_cot: bool = False) -> Dict:
     """Format example into prompt/target structure"""
     # FinQA数据结构：question和answer在'qa'字段里
     qa = item.get("qa", {})
@@ -33,12 +44,25 @@ def _format_example(item: Dict) -> Dict:
     q = qa.get("question", "")
     ctx = _build_context(item)
     
+    # 根据use_cot选择prompt
+    if use_cot:
+        prompt = _COT_INST.format(ctx=ctx, q=q)
+        # CoT模式下，可以添加推理步骤（如果有program的话）
+        program = qa.get("program_re", "") or qa.get("program", "")
+        if program:
+            target = f"Based on the context, I need to: {program}\n\nThe answer is: {str(ans).strip()}"
+        else:
+            target = f"The answer is: {str(ans).strip()}"
+    else:
+        prompt = _DEF_INST.format(ctx=ctx, q=q)
+        target = str(ans).strip()
+    
     return {
         "context": ctx,
         "question": q,
         "answer": str(ans).strip(),
-        "prompt": _DEF_INST.format(ctx=ctx, q=q),
-        "target": str(ans).strip(),
+        "prompt": prompt,
+        "target": target,
         "uid": item.get("id", ""),
         # Keep metadata for debugging
         "program": qa.get("program_re", "") or qa.get("program", ""),
@@ -72,13 +96,14 @@ def _resolve_data_files(split: str):
     base = "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset"
     return f"{base}/{fname}"
 
-def load(split: str = 'train', use_rc_filter: bool = False) -> Dataset:
+def load(split: str = 'train', use_rc_filter: bool = False, use_cot: bool = False) -> Dataset:
     """
     Load FinQA dataset directly from GitHub JSON files (bypasses HF script limitations).
     
     Args:
         split: 'train', 'dev', or 'test'
         use_rc_filter: If True, filter to "non-retrieval RC subset"
+        use_cot: If True, use Chain-of-Thought prompting
     
     Returns:
         Dataset object compatible with HuggingFace datasets API
@@ -108,7 +133,7 @@ def load(split: str = 'train', use_rc_filter: bool = False) -> Dataset:
         raise RuntimeError(f"Expected list of items, got {type(raw_items)}")
     
     # Format all examples
-    data = [_format_example(item) for item in raw_items]
+    data = [_format_example(item, use_cot=use_cot) for item in raw_items]
     
     # Optional: filter to RC subset (no retrieval needed)
     if use_rc_filter:

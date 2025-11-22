@@ -22,6 +22,16 @@ class CLMCollator:
         max_target_len = max(len(t) for t in target_encodings)
         max_prompt_len = self.max_length - max_target_len - 2  # -2 for safety margin
         
+        # If targets are too long, truncate them and ensure minimum prompt space
+        if max_prompt_len < 32:  # Minimum space for prompt
+            max_target_len = self.max_length - 32 - 2
+            max_prompt_len = 32
+            # Truncate targets if needed
+            target_encodings = [
+                t[:max_target_len] if len(t) > max_target_len else t
+                for t in target_encodings
+            ]
+        
         # Truncate prompts if needed
         prompt_encodings = []
         for p in prompts:
