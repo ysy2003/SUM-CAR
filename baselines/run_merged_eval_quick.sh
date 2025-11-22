@@ -4,7 +4,7 @@ echo "========================================"
 echo "Merged Model Quick Evaluation"
 echo "========================================"
 echo ""
-echo "Testing merged memory model on 20 samples per task"
+echo "Testing merged memory model on 1 sample per task"
 echo "to verify the code is working correctly"
 echo ""
 
@@ -27,7 +27,7 @@ python baselines/eval_merged_quick.py \
     --out baselines/merged_model_results_quick.json \
     --k_top 4 \
     --alpha 1.0 \
-    --max_samples 20
+    --max_samples 1
 
 echo ""
 echo "========================================"

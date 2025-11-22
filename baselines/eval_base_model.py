@@ -30,6 +30,11 @@ def eval_gsm8k(model, tokenizer, max_samples=None):
         gold = ex['answer']
         correct += acc_numeric(pred, gold)
         total += 1
+        if total <= 3:
+            print(f"    Example {total}: {'✓' if acc_numeric(pred, gold) else '✗'}")
+            print(f"      Q: {ex['question'][:60]}...")
+            print(f"      Pred: {pred[:100]}")
+            print(f"      Gold: {gold[:60]}")
         if total % 100 == 0:
             print(f"  GSM8K: {total}/{len(ds)} processed, acc={correct/total:.4f}")
     
@@ -59,6 +64,9 @@ def eval_humaneval(model, tokenizer, max_samples=None):
         ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
         correct += 1 if ok else 0
         total += 1
+        if total <= 3:
+            print(f"    Example {total}: {'✓' if ok else '✗'}")
+            print(f"      Generated: {code[:100]}...")
         if total % 20 == 0:
             print(f"  HumanEval: {total}/{len(ds)} processed, pass@1={correct/total:.4f}")
     
@@ -72,22 +80,31 @@ def eval_finqa(model, tokenizer, max_samples=None):
     ds = load_finqa(split='dev', use_rc_filter=False)
     
     if max_samples:
-        ds = ds[:max_samples]
+        if hasattr(ds, 'select'):
+            ds = ds.select(range(min(max_samples, len(ds))))
+        else:
+            ds = ds[:max_samples]
     
     total, correct = 0, 0
     skipped = 0
     for ex in ds:
-        ctx = ex.get('context', '')
-        q = ex.get('question', '')
-        gold = ex.get('answer', '')
+        ctx = ex['context'] if 'context' in ex else ex.get('context', '')
+        q = ex['question'] if 'question' in ex else ex.get('question', '')
+        gold = ex['answer'] if 'answer' in ex else ex.get('answer', '')
         prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
         enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960)
         
         try:
             out_ids = model.generate(enc['input_ids'], max_new_tokens=64, do_sample=False)
             pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
-            correct += em(pred, gold)
+            is_correct = em(pred, gold)
+            correct += is_correct
             total += 1
+            if total <= 3:
+                print(f"    Example {total}: {'✓' if is_correct else '✗'}")
+                print(f"      Q: {q[:60]}...")
+                print(f"      Pred: {pred[:100]}")
+                print(f"      Gold: {gold}")
         except Exception as e:
             skipped += 1
             continue

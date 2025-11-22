@@ -22,10 +22,10 @@ from ..utils.checkpoint import CheckpointManager
 load_dotenv()
 
 LOADERS = {
-    'gsm8k': lambda split: gsm.load(split),
-    'codexglue_refine': lambda split: cglue.load(split),
-    'mbpp': lambda split: mbpp.load(split),
-    'finqa_rc': lambda split: finqa.load(split),
+    'gsm8k': lambda split, use_cot=False: gsm.load(split, use_cot=use_cot),
+    'codexglue_refine': lambda split, use_cot=False: cglue.load(split),  # Code不需要CoT
+    'mbpp': lambda split, use_cot=False: mbpp.load(split),
+    'finqa_rc': lambda split, use_cot=False: finqa.load(split, use_cot=use_cot),
 }
 
 
@@ -82,8 +82,11 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
     ds_name = train_cfg['dataset']
     if ds_name not in LOADERS:
         raise ValueError(f"Unknown dataset key: {ds_name}")
-    logger.log('loading dataset:', ds_name)
-    ds = LOADERS[ds_name]('train')
+    
+    # 检查是否使用CoT
+    use_cot = train_cfg.get('use_cot', False)
+    logger.log(f'Loading dataset: {ds_name} (use_cot={use_cot})')
+    ds = LOADERS[ds_name]('train', use_cot=use_cot)
     
     # 限制数据量（可选，用于快速测试）
     max_examples = train_cfg.get('max_examples', None)
@@ -128,7 +131,7 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
     # Train with refresh_every parameter
     refresh_every = train_cfg.get('refresh_every', 200)
     logger.log(f'Phase II: Training {train_cfg["epochs"]} epochs with refresh_every={refresh_every}...')
-    ft.train(dl, epochs=train_cfg['epochs'], refresh_every=refresh_every)
+    loss_history = ft.train(dl, epochs=train_cfg['epochs'], refresh_every=refresh_every)
 
     # 6) 收集训练统计信息
     import transformers
@@ -176,13 +179,63 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
         },
     }
     
-    # 7) Export patch
+    # 7) Export patch (传入loss历史)
     save_dir = train_cfg['save_dir']
-    patch = ft.build_patch(task, top_t, save_dir, train_stats)
+    patch = ft.build_patch(task, top_t, save_dir, train_stats, loss_history=loss_history)
     ensure_dir('out')
-    dump_json(patch, os.path.join('out', f'patch_{task}.json'))
-    dump_json(train_stats, os.path.join('out', f'patch_{task}_meta.json'))
+    
+    # 保存patch和meta
+    patch_path = os.path.join('out', f'patch_{task}.json')
+    meta_path = os.path.join('out', f'patch_{task}_meta.json')
+    dump_json(patch, patch_path)
+    dump_json(train_stats, meta_path)
     logger.log('patch saved to out/', f'patch_{task}.json')
+    
+    # 保存训练日志到文件
+    log_dir = os.path.join(save_dir, task)
+    ensure_dir(log_dir)
+    log_path = os.path.join(log_dir, 'training.log')
+    
+    with open(log_path, 'w') as f:
+        f.write(f"Task: {task}\n")
+        f.write(f"Dataset: {ds_name}\n")
+        f.write(f"Base Model: {base_model}\n")
+        f.write(f"Training started: {train_stats['timestamp']}\n")
+        f.write(f"\n{'='*60}\n")
+        f.write("Configuration\n")
+        f.write(f"{'='*60}\n")
+        f.write(f"Batch size: {train_cfg['batch_size']}\n")
+        f.write(f"Max length: {train_cfg['max_length']}\n")
+        f.write(f"Epochs: {train_cfg['epochs']}\n")
+        f.write(f"Learning rate (KV): {train_stats['lr_kv']}\n")
+        f.write(f"Learning rate (gate): {train_stats['lr_gate']}\n")
+        f.write(f"Memory slots: {mem_cfg['num_slots']}\n")
+        f.write(f"Top-t: {top_t}\n")
+        f.write(f"k_top: {mem_cfg['k_top']}\n")
+        f.write(f"Use CoT: {use_cot}\n")
+        f.write(f"\n{'='*60}\n")
+        f.write("Loss History\n")
+        f.write(f"{'='*60}\n")
+        
+        if loss_history:
+            f.write("Step\tEpoch\tLoss\n")
+            for record in loss_history:
+                f.write(f"{record['step']}\t{record['epoch']}\t{record['loss']:.6f}\n")
+            
+            # Loss statistics
+            losses = [x['loss'] for x in loss_history]
+            f.write(f"\n{'='*60}\n")
+            f.write("Loss Statistics\n")
+            f.write(f"{'='*60}\n")
+            f.write(f"Initial loss: {losses[0]:.6f}\n")
+            f.write(f"Final loss: {losses[-1]:.6f}\n")
+            f.write(f"Min loss: {min(losses):.6f}\n")
+            f.write(f"Max loss: {max(losses):.6f}\n")
+            f.write(f"Mean loss: {sum(losses)/len(losses):.6f}\n")
+            f.write(f"Loss reduction: {losses[0] - losses[-1]:.6f}\n")
+            f.write(f"Loss reduction %: {100*(losses[0] - losses[-1])/losses[0]:.2f}%\n")
+    
+    logger.log(f'Training log saved to {log_path}')
 
 
 if __name__ == '__main__':
