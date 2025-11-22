@@ -1,0 +1,25 @@
+base_model: gpt2
+mem:
+  num_slots: 2048
+  k_top: 4
+  alpha: 1.0
+  tau: 10.0
+  use_gate: false
+  normalize_retrieval: true
+  track_hits: false
+  hits_source: "none"
+train:
+  epochs: 3
+  lr: 5.0e-4
+  lr_kv: 1.0e-3
+  lr_gate: 1.0e-4
+  batch_size: 1
+  max_length: 384  # CoT需要更长的序列
+  probe_steps: 200
+  top_t: 256
+  refresh_every: 100
+  save_dir: out/finqa_cot
+  seed: 42
+  dataset: finqa_rc
+  max_examples: 500
+  use_cot: true  # 启用Chain-of-Thought
