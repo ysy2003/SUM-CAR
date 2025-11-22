@@ -1,5 +1,5 @@
 """
-Evaluate GPT-2 base model (without memory) on three tasks.
+Evaluate base language model (without memory) on three tasks.
 """
 import os
 import json
@@ -21,7 +21,8 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
     ds = load_dataset('gsm8k', 'main')['test']
     if max_samples:
         ds = ds.select(range(min(max_samples, len(ds))))
-    
+
+    device = next(model.parameters()).device
     total, correct = 0, 0
     predictions = []
     prompt_type = "CoT" if use_cot else "normal"
@@ -31,7 +32,7 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
             prompt = f"Let's solve this step by step.\n\nQuestion: {ex['question']}\n\nLet me think through this carefully:"
         else:
             prompt = f"Solve the problem and give only the final numeric answer.\n\n{ex['question']}\n\nAnswer:"
-        enc = tokenizer(prompt, return_tensors='pt')
+        enc = tokenizer(prompt, return_tensors='pt').to(device)
         # High limit - let model finish naturally with EOS token
         max_tokens = 2048 if use_cot else 512
         out_ids = model.generate(
@@ -70,14 +71,15 @@ def eval_humaneval(model, tokenizer, max_samples=None):
         ds = load_dataset('openai_humaneval')['test']
     except:
         ds = load_dataset('nuprl/humaneval')['test']
-    
+
     if max_samples:
         ds = ds.select(range(min(max_samples, len(ds))))
-    
+
+    device = next(model.parameters()).device
     total, correct = 0, 0
     predictions = []
     for ex in tqdm(ds, desc="HumanEval", unit="problems"):
-        enc = tokenizer(ex['prompt'], return_tensors='pt')
+        enc = tokenizer(ex['prompt'], return_tensors='pt').to(device)
         # High limit for code generation - let model finish naturally
         out_ids = model.generate(
             enc['input_ids'],
@@ -114,13 +116,14 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
     """Evaluate on FinQA financial QA."""
     from src.sumcar.data.finqa_rc import load as load_finqa
     ds = load_finqa(split='dev', use_rc_filter=False)
-    
+
     if max_samples:
         if hasattr(ds, 'select'):
             ds = ds.select(range(min(max_samples, len(ds))))
         else:
             ds = ds[:max_samples]
-    
+
+    device = next(model.parameters()).device
     total, correct = 0, 0
     skipped = 0
     predictions = []
@@ -134,8 +137,8 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
             prompt = f"Answer the question using ONLY the given context. Think step by step.\n\nContext:\n{ctx}\n\nQuestion: {q}\nLet me think through this carefully:\n"
         else:
             prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
-        enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960)
-        
+        enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960).to(device)
+
         try:
             # High limit - let model finish naturally with EOS token
             max_tokens = 2048 if use_cot else 512
@@ -165,16 +168,16 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
     return {'em': correct/total if total > 0 else 0.0, 'total': total, 'skipped': skipped, 'predictions': predictions}
 
 
-def main(base_model='gpt2',
+def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
          out='baselines/base_model_results.json',
          max_samples=None,
          use_cot=False):
     """
-    Evaluate base GPT-2 model on three tasks.
+    Evaluate base language model on three tasks.
 
     Args:
-        base_model: Model name (default: gpt2)
-        out: Output JSON file path
+        base_model: Model name (default: meta-llama/Meta-Llama-3-8B-Instruct)
+        out: Output JSON file path (base name, will append _gsm8k.json, _humaneval.json, _finqa.json)
         max_samples: Maximum samples per task (None = use all)
         use_cot: Use Chain-of-Thought prompting (default: False)
     """
@@ -186,38 +189,58 @@ def main(base_model='gpt2',
 
     # Load model
     print("Loading model...")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
     model = AutoModelForCausalLM.from_pretrained(base_model)
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+    model = model.to(device)
     model.eval()
     print()
-    
-    # Evaluate on three tasks
+
+    # Prepare output file paths
+    out_base = out.replace('.json', '')
+    os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+
+    # Evaluate on three tasks and save after each
     results = {}
-    
+
     print("Evaluating GSM8K (Math)...")
     results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot)
     print(f"  ✓ GSM8K Accuracy: {results['gsm8k']['accuracy']:.4f}")
+    # Save GSM8K results immediately
+    gsm8k_out = f"{out_base}_gsm8k.json"
+    with open(gsm8k_out, 'w') as f:
+        json.dump({'gsm8k': results['gsm8k'], 'config': {'use_cot': use_cot}}, f, indent=2)
+    print(f"  ✓ Saved to: {gsm8k_out}")
     print()
-    
+
     print("Evaluating HumanEval (Code)...")
     results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
     print(f"  ✓ HumanEval Pass@1: {results['humaneval']['pass@1']:.4f}")
+    # Save HumanEval results immediately
+    humaneval_out = f"{out_base}_humaneval.json"
+    with open(humaneval_out, 'w') as f:
+        json.dump({'humaneval': results['humaneval'], 'config': {'use_cot': use_cot}}, f, indent=2)
+    print(f"  ✓ Saved to: {humaneval_out}")
     print()
-    
+
     print("Evaluating FinQA (Finance)...")
     results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
     print(f"  ✓ FinQA EM: {results['finqa']['em']:.4f}")
+    # Save FinQA results immediately
+    finqa_out = f"{out_base}_finqa.json"
+    with open(finqa_out, 'w') as f:
+        json.dump({'finqa': results['finqa'], 'config': {'use_cot': use_cot}}, f, indent=2)
+    print(f"  ✓ Saved to: {finqa_out}")
     print()
-    
-    # Save results
+
+    # Also save combined results
     results['config'] = {'use_cot': use_cot}
-    os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     with open(out, 'w') as f:
         json.dump(results, f, indent=2)
-    
-    print(f"Results saved to: {out}")
+    print(f"Combined results saved to: {out}")
     print()
     print("Summary:")
     print(f"  GSM8K Accuracy:    {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['total']} samples)")
