@@ -31,17 +31,23 @@ def load_merged_model(base_model, merged_dir, k_top=4, alpha=1.0):
 
 
 @torch.no_grad()
-def eval_gsm8k(model, tokenizer, max_samples=20):
+def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
     """Quick eval on GSM8K."""
     ds = load_dataset('gsm8k', 'main')['test']
     ds = ds.select(range(min(max_samples, len(ds))))
     
     total, correct = 0, 0
-    print(f"\n  Testing {len(ds)} GSM8K samples...")
+    cot_str = " with CoT" if use_cot else ""
+    print(f"\n  Testing {len(ds)} GSM8K samples{cot_str}...")
     for i, ex in enumerate(ds):
-        prompt = f"Solve the problem and give only the final numeric answer.\n\n{ex['question']}\n\nAnswer:"
+        if use_cot:
+            prompt = f"Let's solve this step by step.\n\nQuestion: {ex['question']}\n\nLet me think through this carefully:"
+        else:
+            prompt = f"Solve the problem and give only the final numeric answer.\n\n{ex['question']}\n\nAnswer:"
+        
         enc = tokenizer(prompt, return_tensors='pt')
-        out_ids = model.generate(enc['input_ids'], max_new_tokens=64, do_sample=False)
+        max_tokens = 128 if use_cot else 64
+        out_ids = model.generate(enc['input_ids'], max_new_tokens=max_tokens, do_sample=False)
         pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
         gold = ex['answer']
         is_correct = acc_numeric(pred, gold)
@@ -89,7 +95,7 @@ def eval_humaneval(model, tokenizer, max_samples=20):
 
 
 @torch.no_grad()
-def eval_finqa(model, tokenizer, max_samples=20):
+def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
     """Quick eval on FinQA."""
     from src.sumcar.data.finqa_rc import load as load_finqa
     ds = load_finqa(split='dev', use_rc_filter=False)
@@ -101,16 +107,21 @@ def eval_finqa(model, tokenizer, max_samples=20):
     
     total, correct = 0, 0
     skipped = 0
-    print(f"\n  Testing {len(ds)} FinQA samples...")
+    prompt_type = "CoT" if use_cot else "normal"
+    print(f"\n  Testing {len(ds)} FinQA samples ({prompt_type})...")
     for i, ex in enumerate(ds):
         ctx = ex['context'] if 'context' in ex else ex.get('context', '')
         q = ex['question'] if 'question' in ex else ex.get('question', '')
         gold = ex['answer'] if 'answer' in ex else ex.get('answer', '')
-        prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
+        if use_cot:
+            prompt = f"Answer the question using ONLY the given context. Think step by step.\n\nContext:\n{ctx}\n\nQuestion: {q}\nLet me think through this carefully:\n"
+        else:
+            prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
         enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960)
         
         try:
-            out_ids = model.generate(enc['input_ids'], max_new_tokens=64, do_sample=False)
+            max_tokens = 128 if use_cot else 64
+            out_ids = model.generate(enc['input_ids'], max_new_tokens=max_tokens, do_sample=False)
             pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
             is_correct = em(pred, gold)
             correct += is_correct
@@ -132,7 +143,8 @@ def main(base_model='gpt2',
          out='baselines/merged_model_results_quick.json',
          k_top=4,
          alpha=1.0,
-         max_samples=20):
+         max_samples=20,
+         use_cot=False):
     """
     Quick evaluation of merged model.
     
@@ -143,6 +155,7 @@ def main(base_model='gpt2',
         k_top: Top-k for memory retrieval (should match training)
         alpha: Alpha parameter (should match training)
         max_samples: Samples per task (default: 20)
+        use_cot: Use Chain-of-Thought prompting (default: False)
     """
     print(f"=== Quick Evaluation: Merged Model ===")
     print(f"Base model: {base_model}")
@@ -166,7 +179,7 @@ def main(base_model='gpt2',
     print("\n" + "="*50)
     print("GSM8K (Math)")
     print("="*50)
-    results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples)
+    results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot)
     print(f"\n  Result: {results['gsm8k']['correct']}/{results['gsm8k']['total']} correct")
     print(f"  Accuracy: {results['gsm8k']['accuracy']:.4f}")
     
@@ -180,11 +193,12 @@ def main(base_model='gpt2',
     print("\n" + "="*50)
     print("FinQA (Finance)")
     print("="*50)
-    results['finqa'] = eval_finqa(model, tokenizer, max_samples)
+    results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
     print(f"\n  Result: {results['finqa']['correct']}/{results['finqa']['total']} correct")
     print(f"  EM: {results['finqa']['em']:.4f}")
     
     # Save
+    results['config'] = {'use_cot': use_cot, 'k_top': k_top, 'alpha': alpha}
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     with open(out, 'w') as f:
         json.dump(results, f, indent=2)
