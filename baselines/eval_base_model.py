@@ -22,6 +22,7 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
         ds = ds.select(range(min(max_samples, len(ds))))
     
     total, correct = 0, 0
+    predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"  Using {prompt_type} prompting")
     for ex in ds:
@@ -34,17 +35,26 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
         out_ids = model.generate(enc['input_ids'], max_new_tokens=max_tokens, do_sample=False)
         pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
         gold = ex['answer']
-        correct += acc_numeric(pred, gold)
+        is_correct = acc_numeric(pred, gold)
+        correct += is_correct
         total += 1
+        
+        predictions.append({
+            'question': ex['question'],
+            'prediction': pred,
+            'gold': gold,
+            'correct': bool(is_correct)
+        })
+        
         if total <= 3:
-            print(f"    Example {total}: {'✓' if acc_numeric(pred, gold) else '✗'}")
+            print(f"    Example {total}: {'✓' if is_correct else '✗'}")
             print(f"      Q: {ex['question'][:60]}...")
             print(f"      Pred: {pred[:100]}")
             print(f"      Gold: {gold[:60]}")
         if total % 100 == 0:
             print(f"  GSM8K: {total}/{len(ds)} processed, acc={correct/total:.4f}")
     
-    return {'accuracy': correct/total, 'total': total}
+    return {'accuracy': correct/total, 'total': total, 'predictions': predictions}
 
 
 @torch.no_grad()
@@ -59,6 +69,7 @@ def eval_humaneval(model, tokenizer, max_samples=None):
         ds = ds.select(range(min(max_samples, len(ds))))
     
     total, correct = 0, 0
+    predictions = []
     for ex in ds:
         enc = tokenizer(ex['prompt'], return_tensors='pt')
         out_ids = model.generate(enc['input_ids'], max_new_tokens=256, do_sample=False)
@@ -70,13 +81,21 @@ def eval_humaneval(model, tokenizer, max_samples=None):
         ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
         correct += 1 if ok else 0
         total += 1
+        
+        predictions.append({
+            'prompt': ex['prompt'],
+            'generated_code': code,
+            'passed': bool(ok),
+            'error': res.error if not ok else None
+        })
+        
         if total <= 3:
             print(f"    Example {total}: {'✓' if ok else '✗'}")
             print(f"      Generated: {code[:100]}...")
         if total % 20 == 0:
             print(f"  HumanEval: {total}/{len(ds)} processed, pass@1={correct/total:.4f}")
     
-    return {'pass@1': correct/total, 'total': total}
+    return {'pass@1': correct/total, 'total': total, 'predictions': predictions}
 
 
 @torch.no_grad()
@@ -93,6 +112,7 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
     
     total, correct = 0, 0
     skipped = 0
+    predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"  Using {prompt_type} prompting")
     for ex in ds:
@@ -112,6 +132,15 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
             is_correct = em(pred, gold)
             correct += is_correct
             total += 1
+            
+            predictions.append({
+                'question': q,
+                'context': ctx[:200] + '...' if len(ctx) > 200 else ctx,  # Truncate context for readability
+                'prediction': pred,
+                'gold': gold,
+                'correct': bool(is_correct)
+            })
+            
             if total <= 3:
                 print(f"    Example {total}: {'✓' if is_correct else '✗'}")
                 print(f"      Q: {q[:60]}...")
@@ -124,7 +153,7 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
         if total % 100 == 0:
             print(f"  FinQA: {total} processed, em={correct/total:.4f}")
     
-    return {'em': correct/total if total > 0 else 0.0, 'total': total, 'skipped': skipped}
+    return {'em': correct/total if total > 0 else 0.0, 'total': total, 'skipped': skipped, 'predictions': predictions}
 
 
 def main(base_model='gpt2', 

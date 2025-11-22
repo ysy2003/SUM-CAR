@@ -13,8 +13,8 @@ train:
   lr: 5.0e-4
   lr_kv: 1.0e-3
   lr_gate: 1.0e-4
-  batch_size: 1
-  max_length: 128  # Reduced from 192
+  batch_size: 8
+  max_length: 128  # 代码序列较短，可以用更大batch
   probe_steps: 200  # Reduced from 300
   top_t: 256  # Reduced from 512
   refresh_every: 100

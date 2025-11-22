@@ -37,6 +37,7 @@ def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
     ds = ds.select(range(min(max_samples, len(ds))))
     
     total, correct = 0, 0
+    predictions = []
     cot_str = " with CoT" if use_cot else ""
     print(f"\n  Testing {len(ds)} GSM8K samples{cot_str}...")
     for i, ex in enumerate(ds):
@@ -53,13 +54,21 @@ def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
         is_correct = acc_numeric(pred, gold)
         correct += is_correct
         total += 1
-        if i < 3:  # Show first 3 examples
+        
+        predictions.append({
+            'question': ex['question'],
+            'prediction': pred,
+            'gold': gold,
+            'correct': bool(is_correct)
+        })
+        
+        if i < 3:
             print(f"    Example {i+1}: {'✓' if is_correct else '✗'}")
             print(f"      Q: {ex['question'][:60]}...")
-            print(f"      Pred: {pred[:50]}")
-            print(f"      Gold: {gold[:50]}")
+            print(f"      Pred: {pred[:100]}")
+            print(f"      Gold: {gold[:60]}")
     
-    return {'accuracy': correct/total, 'total': total, 'correct': correct}
+    return {'accuracy': correct/total, 'total': total, 'correct': correct, 'predictions': predictions}
 
 
 @torch.no_grad()
@@ -73,6 +82,7 @@ def eval_humaneval(model, tokenizer, max_samples=20):
     ds = ds.select(range(min(max_samples, len(ds))))
     
     total, correct = 0, 0
+    predictions = []
     print(f"\n  Testing {len(ds)} HumanEval samples...")
     for i, ex in enumerate(ds):
         enc = tokenizer(ex['prompt'], return_tensors='pt')
@@ -84,6 +94,14 @@ def eval_humaneval(model, tokenizer, max_samples=20):
         ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
         correct += 1 if ok else 0
         total += 1
+        
+        predictions.append({
+            'prompt': ex['prompt'],
+            'generated_code': code,
+            'passed': bool(ok),
+            'error': res.error if not ok else None
+        })
+        
         if i < 3:
             print(f"    Example {i+1}: {'✓' if ok else '✗'}")
             print(f"      Prompt: {ex['prompt'][:60]}...")
@@ -91,7 +109,7 @@ def eval_humaneval(model, tokenizer, max_samples=20):
             if not ok:
                 print(f"      Error: {res.error[:100] if res.error else 'Test failed'}")
     
-    return {'pass@1': correct/total, 'total': total, 'correct': correct}
+    return {'pass@1': correct/total, 'total': total, 'correct': correct, 'predictions': predictions}
 
 
 @torch.no_grad()
@@ -107,6 +125,7 @@ def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
     
     total, correct = 0, 0
     skipped = 0
+    predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"\n  Testing {len(ds)} FinQA samples ({prompt_type})...")
     for i, ex in enumerate(ds):
@@ -126,6 +145,15 @@ def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
             is_correct = em(pred, gold)
             correct += is_correct
             total += 1
+            
+            predictions.append({
+                'question': q,
+                'context': ctx[:200] + '...' if len(ctx) > 200 else ctx,
+                'prediction': pred,
+                'gold': gold,
+                'correct': bool(is_correct)
+            })
+            
             if i < 3:
                 print(f"    Example {i+1}: {'✓' if is_correct else '✗'}")
                 print(f"      Q: {q[:60]}...")
@@ -135,7 +163,7 @@ def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
         except Exception as e:
             skipped += 1
     
-    return {'em': correct/total if total > 0 else 0.0, 'total': total, 'correct': correct, 'skipped': skipped}
+    return {'em': correct/total if total > 0 else 0.0, 'total': total, 'correct': correct, 'skipped': skipped, 'predictions': predictions}
 
 
 def main(base_model='gpt2',

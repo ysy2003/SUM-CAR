@@ -4,7 +4,7 @@ echo "========================================"
 echo "Merged Model Quick Evaluation"
 echo "========================================"
 echo ""
-echo "Testing merged memory model on 1 sample per task"
+echo "Testing merged memory model on 3 samples per task"
 echo "to verify the code is working correctly"
 echo ""
 
@@ -39,28 +39,28 @@ fi
 echo "✓ Merged model found at $MERGED_DIR"
 echo ""
 
-# Run quick evaluation
+# Run quick evaluation with 3 samples per task
 if [ "$USE_COT" = true ]; then
     echo "Using Chain-of-Thought prompting"
     OUT_FILE="${MERGED_DIR##*/}_results_quick_cot.json"
-    python baselines/eval_merged_quick.py \
+    python scripts/eval_merged.py \
         --base_model gpt2 \
         --merged_dir "$MERGED_DIR" \
         --out "baselines/$OUT_FILE" \
         --k_top 4 \
         --alpha 1.0 \
-        --max_samples 1 \
+        --max_samples 3 \
         --use_cot
 else
     echo "Using normal prompting"
-    OUT_FILE="${MERGED_DIR##*/}_results_quick.json"
-    python baselines/eval_merged_quick.py \
+    OUT_FILE="${MERGED_DIR##*/}_results.json"
+    python scripts/eval_merged.py \
         --base_model gpt2 \
         --merged_dir "$MERGED_DIR" \
         --out "baselines/$OUT_FILE" \
         --k_top 4 \
         --alpha 1.0 \
-        --max_samples 1
+        --max_samples 3
 fi
 
 echo ""
