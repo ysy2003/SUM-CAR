@@ -4,6 +4,9 @@
 
 set -e
 
+# Set PYTHONPATH so Python can find the sumcar module
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+
 echo "=== Starting Multi-Task Training ==="
 echo "Tasks: Math (GSM8K), Code (CodeXGLUE), FinQA"
 echo ""
@@ -14,7 +17,7 @@ echo "Task 1/3: Training Math (GSM8K) with CoT"
 echo "========================================="
 python -m sumcar.cli.train_task \
     --config configs/train_math_cot.yaml \
-    --use_xla True
+    --use_xla False
 echo "✓ Math training completed. Outputs in: out/math_cot/"
 echo ""
 
@@ -24,7 +27,7 @@ echo "Task 2/3: Training Code (CodeXGLUE)"
 echo "========================================="
 python -m sumcar.cli.train_task \
     --config configs/train_code.yaml \
-    --use_xla True
+    --use_xla False
 echo "✓ Code training completed. Outputs in: out/code/ and patches/code/"
 echo ""
 
@@ -34,7 +37,7 @@ echo "Task 3/3: Training FinQA with CoT"
 echo "========================================="
 python -m sumcar.cli.train_task \
     --config configs/train_finqa_cot.yaml \
-    --use_xla True
+    --use_xla False
 echo "✓ FinQA training completed. Outputs in: out/finqa_cot/"
 echo ""
 

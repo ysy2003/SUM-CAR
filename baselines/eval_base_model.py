@@ -11,7 +11,7 @@ from tqdm import tqdm
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.sumcar.eval.metrics import acc_numeric, em
+from src.sumcar.eval.metrics import acc_numeric, acc_numeric_tolerant, em
 from src.sumcar.utils.sandbox import safe_exec
 
 
@@ -113,7 +113,10 @@ def eval_humaneval(model, tokenizer, max_samples=None):
 
 @torch.no_grad()
 def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
-    """Evaluate on FinQA financial QA."""
+    """
+    Evaluate on FinQA financial QA.
+    Uses numeric extraction with tolerance (more accurate than strict EM).
+    """
     from src.sumcar.data.finqa_rc import load as load_finqa
     ds = load_finqa(split='dev', use_rc_filter=False)
 
@@ -124,11 +127,13 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
             ds = ds[:max_samples]
 
     device = next(model.parameters()).device
-    total, correct = 0, 0
+    total, correct_numeric, correct_em = 0, 0, 0
     skipped = 0
     predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"  Using {prompt_type} prompting")
+    print(f"  Evaluation: Numeric extraction with tolerance (improved)")
+
     for ex in tqdm(ds, desc="FinQA", unit="questions"):
         ctx = ex['context'] if 'context' in ex else ex.get('context', '')
         q = ex['question'] if 'question' in ex else ex.get('question', '')
@@ -150,22 +155,35 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
                 pad_token_id=tokenizer.pad_token_id
             )
             pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
-            is_correct = em(pred, gold)
-            correct += is_correct
+
+            # Use numeric extraction with tolerance (primary metric)
+            is_correct_numeric = acc_numeric_tolerant(pred, gold)
+            # Keep EM for comparison
+            is_correct_em = em(pred, gold)
+
+            correct_numeric += is_correct_numeric
+            correct_em += is_correct_em
             total += 1
-            
+
             predictions.append({
                 'question': q,
                 'context': ctx[:200] + '...' if len(ctx) > 200 else ctx,  # Truncate context for readability
                 'prediction': pred,
                 'gold': gold,
-                'correct': bool(is_correct)
+                'correct': bool(is_correct_numeric),  # Primary metric
+                'correct_em': bool(is_correct_em)  # For comparison
             })
         except Exception as e:
             skipped += 1
             continue
-    
-    return {'em': correct/total if total > 0 else 0.0, 'total': total, 'skipped': skipped, 'predictions': predictions}
+
+    return {
+        'accuracy': correct_numeric/total if total > 0 else 0.0,  # Primary metric (numeric)
+        'em': correct_em/total if total > 0 else 0.0,  # Legacy metric (for comparison)
+        'total': total,
+        'skipped': skipped,
+        'predictions': predictions
+    }
 
 
 def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
@@ -228,16 +246,17 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
 
     print("Evaluating FinQA (Finance)...")
     results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
-    print(f"  ✓ FinQA EM: {results['finqa']['em']:.4f}")
+    print(f"  ✓ FinQA Accuracy (numeric): {results['finqa']['accuracy']:.4f}")
+    print(f"  ✓ FinQA EM (legacy):        {results['finqa']['em']:.4f}")
     # Save FinQA results immediately
     finqa_out = f"{out_base}_finqa.json"
     with open(finqa_out, 'w') as f:
-        json.dump({'finqa': results['finqa'], 'config': {'use_cot': use_cot}}, f, indent=2)
+        json.dump({'finqa': results['finqa'], 'config': {'use_cot': use_cot, 'eval_method': 'numeric_tolerant'}}, f, indent=2)
     print(f"  ✓ Saved to: {finqa_out}")
     print()
 
     # Also save combined results
-    results['config'] = {'use_cot': use_cot}
+    results['config'] = {'use_cot': use_cot, 'finqa_eval_method': 'numeric_tolerant'}
     with open(out, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"Combined results saved to: {out}")
@@ -245,7 +264,8 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
     print("Summary:")
     print(f"  GSM8K Accuracy:    {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['total']} samples)")
     print(f"  HumanEval Pass@1:  {results['humaneval']['pass@1']:.4f} ({results['humaneval']['total']} samples)")
-    print(f"  FinQA EM:          {results['finqa']['em']:.4f} ({results['finqa']['total']} samples)")
+    print(f"  FinQA Accuracy:    {results['finqa']['accuracy']:.4f} ({results['finqa']['total']} samples)")
+    print(f"  FinQA EM (legacy): {results['finqa']['em']:.4f} (for comparison)")
 
 
 if __name__ == '__main__':

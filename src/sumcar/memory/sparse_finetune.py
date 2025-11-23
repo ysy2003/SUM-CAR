@@ -9,8 +9,10 @@ from typing import Dict
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, get_linear_schedule_with_warmup
+from tqdm import tqdm
 
 from ..models.base_model import MemoryAugmentedCausalLM
+from ..models.lora_memory_model import LoRAMemoryAugmentedCausalLM
 from .kv_memory import KVMemoryLayer
 from .metrics import choose_top_t_from_counts, SpecificityTracker, mask_kv_grads
 from ..utils.io import ensure_dir, dump_json
@@ -34,7 +36,7 @@ class SparseFinetuner:
         参数:
             base_model: 基础模型名称或路径
             mem_cfg: 记忆配置字典 {'num_slots', 'k_top', 'alpha', 'tau'}
-            train_cfg: 训练配置字典 {'lr', ...}
+            train_cfg: 训练配置字典 {'lr', 'use_lora', 'lora_config', ...}
             tokenizer: 分词器（可选）
             logger: 日志器（可选）
             use_xla: 是否使用 XLA（TPU 训练）
@@ -42,13 +44,13 @@ class SparseFinetuner:
         self.logger = logger or Logger('[train]')
         self.tok = tokenizer or AutoTokenizer.from_pretrained(base_model)
         self.use_xla = use_xla
-        
+
         if self.tok.pad_token_id is None:
             self.tok.pad_token = self.tok.eos_token
-        
+
         # 推断模型维度
         d_model = self._infer_d_model(base_model)
-        
+
         # 创建记忆层（增强版，带门控）
         self.mem = KVMemoryLayer(
             d_model=d_model,
@@ -62,11 +64,19 @@ class SparseFinetuner:
             hits_source=mem_cfg.get('hits_source', 'topk'),
             track_interval=mem_cfg.get('track_interval', 200)
         )
-        
-        # 创建增强模型
-        self.model = MemoryAugmentedCausalLM(base_model, self.mem)
+
+        # 创建增强模型（支持 LoRA）
+        use_lora = train_cfg.get('use_lora', False)
+        if use_lora:
+            self.logger.log('Using LoRA + Memory augmented model')
+            lora_config = train_cfg.get('lora_config', {})
+            self.model = LoRAMemoryAugmentedCausalLM(base_model, self.mem, lora_config)
+        else:
+            self.logger.log('Using standard Memory augmented model')
+            self.model = MemoryAugmentedCausalLM(base_model, self.mem)
+
         self.cfg = train_cfg
-        
+
         # 特异度追踪器（传入任务名称）
         task_name = train_cfg.get('dataset', 'unknown')
         self.spec_tracker = SpecificityTracker(
@@ -106,9 +116,10 @@ class SparseFinetuner:
         self.model.to(device)
         self.model.eval()
         self.mem.enable_access_logging()
-        
+
         cnt = 0
         with torch.no_grad():
+            probe_pbar = tqdm(total=steps, desc="Probing memory slots", unit="batch")
             for batch in dl:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
@@ -129,8 +140,10 @@ class SparseFinetuner:
                         xm.mark_step()  # CPU 统计不进 XLA 图
                 
                 cnt += 1
+                probe_pbar.update(1)
                 if cnt >= steps:
                     break
+            probe_pbar.close()
         
         self.mem.disable_access_logging()
         total_accesses = int(self.mem.acc_counts.sum().item())
@@ -188,7 +201,8 @@ class SparseFinetuner:
         
         step = 0
         for ep in range(epochs):
-            for batch in dl:
+            epoch_pbar = tqdm(dl, desc=f"Epoch {ep+1}/{epochs}", unit="batch")
+            for batch in epoch_pbar:
                 step += 1
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
@@ -215,7 +229,10 @@ class SparseFinetuner:
                 
                 sch.step()
                 opt.zero_grad(set_to_none=True)
-                
+
+                # Update progress bar with current loss
+                epoch_pbar.set_postfix({"loss": f"{loss.item():.4f}", "step": step})
+
                 # 更新特异度（每 refresh_every 步统计一次）
                 if step % refresh_every == 0:
                     if self.use_xla:
