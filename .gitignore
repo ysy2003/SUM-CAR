@@ -91,3 +91,19 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+out/math_only/memory.pt
+out/patch_finqa.json
+out/code_only/memory.pt
+out/code/patch_codexglue.json
+out/patch_codexglue.json
+out/finqa_cot/patch_finqa.json
+out/math_cot/patch_gsm8k.json
+out/patch_gsm8k.json
+out/patch_gsm8k.json
+out/merged/memory.pt
+# Ignore everything in out/ folder
+out/
+
+# Also ignore all files under patches/ folder
+patches/
+

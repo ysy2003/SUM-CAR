@@ -15,6 +15,23 @@ from src.sumcar.eval.metrics import acc_numeric, acc_numeric_tolerant, em
 from src.sumcar.utils.sandbox import safe_exec
 
 
+def extract_code_from_markdown(text: str) -> str:
+    """Extract code from markdown code blocks or raw text."""
+    import re
+
+    # Try to find code in markdown blocks (```python ... ``` or ``` ... ```)
+    # Match opening ```, optional "python", newline, content, closing ```
+    pattern = r'```(?:python)?\s*\n(.*?)\n```'
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    if matches:
+        # Return the first code block found
+        return matches[0].strip()
+
+    # If no markdown blocks, return the text as-is (might be raw code)
+    return text.strip()
+
+
 @torch.no_grad()
 def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
     """Evaluate on GSM8K math problems."""
@@ -29,20 +46,35 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
     print(f"  Using {prompt_type} prompting")
     for ex in tqdm(ds, desc="GSM8K", unit="problems"):
         if use_cot:
-            prompt = f"Let's solve this step by step.\n\nQuestion: {ex['question']}\n\nLet me think through this carefully:"
+            prompt = f"Question: {ex['question']}\n\nThink step by step, then provide your final numeric answer in the last sentence."
         else:
-            prompt = f"Solve the problem and give only the final numeric answer.\n\n{ex['question']}\n\nAnswer:"
-        enc = tokenizer(prompt, return_tensors='pt').to(device)
+            prompt = f"Question: {ex['question']}\n\nProvide your final numeric answer in the last sentence."
+
+        # Use chat template for proper formatting
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        enc = tokenizer([text], return_tensors='pt').to(device)
+
         # High limit - let model finish naturally with EOS token
-        max_tokens = 2048 if use_cot else 512
+        max_tokens = 4096  # Generous limit for all math reasoning
+        input_length = enc['input_ids'].shape[1]
         out_ids = model.generate(
-            enc['input_ids'],
+            **enc,
             max_new_tokens=max_tokens,
             do_sample=False,
             eos_token_id=tokenizer.eos_token_id,  # Stop at EOS
             pad_token_id=tokenizer.pad_token_id
         )
-        pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
+
+        # Decode only generated tokens (skip input)
+        if len(out_ids[0]) > input_length:
+            pred = tokenizer.decode(out_ids[0][input_length:], skip_special_tokens=True)
+        else:
+            pred = tokenizer.decode(out_ids[0], skip_special_tokens=True)
         gold = ex['answer']
         is_correct = acc_numeric(pred, gold)
         correct += is_correct
@@ -79,31 +111,51 @@ def eval_humaneval(model, tokenizer, max_samples=None):
     total, correct = 0, 0
     predictions = []
     for ex in tqdm(ds, desc="HumanEval", unit="problems"):
-        enc = tokenizer(ex['prompt'], return_tensors='pt').to(device)
+        prompt = ex['prompt']
+
+        # Use chat template for proper formatting
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        enc = tokenizer([text], return_tensors='pt').to(device)
+
         # High limit for code generation - let model finish naturally
+        input_length = enc['input_ids'].shape[1]
         out_ids = model.generate(
-            enc['input_ids'],
-            max_new_tokens=1024,  # Generous limit for complex functions
+            **enc,
+            max_new_tokens=2048,  # Generous limit for complex functions
             do_sample=False,
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id
         )
-        code = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
+
+        # Decode only generated tokens (skip input)
+        if len(out_ids[0]) > input_length:
+            raw_output = tokenizer.decode(out_ids[0][input_length:], skip_special_tokens=True)
+        else:
+            raw_output = tokenizer.decode(out_ids[0], skip_special_tokens=True)
+
+        # Extract code from markdown blocks if present
+        code = extract_code_from_markdown(raw_output)
 
         # Combine prompt (function signature) with generated code (function body)
-        full_code = ex['prompt'] + code
+        executed_code = ex['prompt'] + code
 
         # Run tests
         test_code = ex.get('test', '')
-        res = safe_exec(full_code + "\n\n" + test_code)
+        res = safe_exec(executed_code + "\n\n" + test_code)
         ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
         correct += 1 if ok else 0
         total += 1
-        
+
         predictions.append({
             'prompt': ex['prompt'],
-            'generated_code': code,
-            'full_code': full_code,  # Include complete executable code
+            'raw_output': raw_output,  # Store raw model output for debugging
+            'extracted_code': code,  # Code extracted from markdown
+            'executed_code': executed_code,  # Complete executable code
             'passed': bool(ok),
             'error': res.error if not ok else None
         })
@@ -115,7 +167,7 @@ def eval_humaneval(model, tokenizer, max_samples=None):
 def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
     """
     Evaluate on FinQA financial QA.
-    Uses numeric extraction with tolerance (more accurate than strict EM).
+    Uses acc_numeric_tolerant (handles financial formats, percentages, precision).
     """
     from src.sumcar.data.finqa_rc import load as load_finqa
     ds = load_finqa(split='dev', use_rc_filter=False)
@@ -127,42 +179,54 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
             ds = ds[:max_samples]
 
     device = next(model.parameters()).device
-    total, correct_numeric, correct_em = 0, 0, 0
+    total, correct = 0, 0
     skipped = 0
     predictions = []
     prompt_type = "CoT" if use_cot else "normal"
     print(f"  Using {prompt_type} prompting")
-    print(f"  Evaluation: Numeric extraction with tolerance (improved)")
+    print(f"  Evaluation: acc_numeric_tolerant (handles percentages, precision)")
 
     for ex in tqdm(ds, desc="FinQA", unit="questions"):
         ctx = ex['context'] if 'context' in ex else ex.get('context', '')
         q = ex['question'] if 'question' in ex else ex.get('question', '')
         gold = ex['answer'] if 'answer' in ex else ex.get('answer', '')
         if use_cot:
-            prompt = f"Answer the question using ONLY the given context. Think step by step.\n\nContext:\n{ctx}\n\nQuestion: {q}\nLet me think through this carefully:\n"
+            prompt = f"Context:\n{ctx}\n\nQuestion: {q}\n\nThink step by step, then provide your final numeric answer in the last sentence."
         else:
-            prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
-        enc = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=960).to(device)
+            prompt = f"Context:\n{ctx}\n\nQuestion: {q}\n\nProvide your final numeric answer in the last sentence."
+
+        # Use chat template for proper formatting
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        # Truncate input if needed to fit context
+        enc = tokenizer([text], return_tensors='pt', truncation=True, max_length=960).to(device)
 
         try:
             # High limit - let model finish naturally with EOS token
-            max_tokens = 2048 if use_cot else 512
+            # Match GSM8K limits for fair comparison between reasoning tasks
+            max_tokens = 4096  # Same as GSM8K
+            input_length = enc['input_ids'].shape[1]
             out_ids = model.generate(
-                enc['input_ids'],
+                **enc,
                 max_new_tokens=max_tokens,
                 do_sample=False,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id
             )
-            pred = tokenizer.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
 
-            # Use numeric extraction with tolerance (primary metric)
-            is_correct_numeric = acc_numeric_tolerant(pred, gold)
-            # Keep EM for comparison
-            is_correct_em = em(pred, gold)
+            # Decode only generated tokens (skip input)
+            if len(out_ids[0]) > input_length:
+                pred = tokenizer.decode(out_ids[0][input_length:], skip_special_tokens=True)
+            else:
+                pred = tokenizer.decode(out_ids[0], skip_special_tokens=True)
 
-            correct_numeric += is_correct_numeric
-            correct_em += is_correct_em
+            # Use tolerant metric for financial data
+            is_correct = acc_numeric_tolerant(pred, gold)
+            correct += is_correct
             total += 1
 
             predictions.append({
@@ -170,16 +234,14 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
                 'context': ctx[:200] + '...' if len(ctx) > 200 else ctx,  # Truncate context for readability
                 'prediction': pred,
                 'gold': gold,
-                'correct': bool(is_correct_numeric),  # Primary metric
-                'correct_em': bool(is_correct_em)  # For comparison
+                'correct': bool(is_correct)
             })
         except Exception as e:
             skipped += 1
             continue
 
     return {
-        'accuracy': correct_numeric/total if total > 0 else 0.0,  # Primary metric (numeric)
-        'em': correct_em/total if total > 0 else 0.0,  # Legacy metric (for comparison)
+        'accuracy': correct/total if total > 0 else 0.0,
         'total': total,
         'skipped': skipped,
         'predictions': predictions
@@ -217,55 +279,39 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
     model.eval()
     print()
 
-    # Prepare output file paths
-    out_base = out.replace('.json', '')
+    # Prepare output file path
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
 
-    # Evaluate on three tasks and save after each
+    # Evaluate on three tasks
     results = {}
 
     print("Evaluating GSM8K (Math)...")
     results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot)
     print(f"  ✓ GSM8K Accuracy: {results['gsm8k']['accuracy']:.4f}")
-    # Save GSM8K results immediately
-    gsm8k_out = f"{out_base}_gsm8k.json"
-    with open(gsm8k_out, 'w') as f:
-        json.dump({'gsm8k': results['gsm8k'], 'config': {'use_cot': use_cot}}, f, indent=2)
-    print(f"  ✓ Saved to: {gsm8k_out}")
     print()
 
     print("Evaluating HumanEval (Code)...")
     results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
     print(f"  ✓ HumanEval Pass@1: {results['humaneval']['pass@1']:.4f}")
-    # Save HumanEval results immediately
-    humaneval_out = f"{out_base}_humaneval.json"
-    with open(humaneval_out, 'w') as f:
-        json.dump({'humaneval': results['humaneval'], 'config': {'use_cot': use_cot}}, f, indent=2)
-    print(f"  ✓ Saved to: {humaneval_out}")
     print()
 
     print("Evaluating FinQA (Finance)...")
     results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
-    print(f"  ✓ FinQA Accuracy (numeric): {results['finqa']['accuracy']:.4f}")
-    print(f"  ✓ FinQA EM (legacy):        {results['finqa']['em']:.4f}")
-    # Save FinQA results immediately
-    finqa_out = f"{out_base}_finqa.json"
-    with open(finqa_out, 'w') as f:
-        json.dump({'finqa': results['finqa'], 'config': {'use_cot': use_cot, 'eval_method': 'numeric_tolerant'}}, f, indent=2)
-    print(f"  ✓ Saved to: {finqa_out}")
+    print(f"  ✓ FinQA Accuracy: {results['finqa']['accuracy']:.4f}")
     print()
 
-    # Also save combined results
-    results['config'] = {'use_cot': use_cot, 'finqa_eval_method': 'numeric_tolerant'}
+    # Save combined results
+    results['config'] = {'use_cot': use_cot, 'gsm8k_eval_method': 'acc_numeric', 'finqa_eval_method': 'acc_numeric_tolerant'}
     with open(out, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"Combined results saved to: {out}")
+    print(f"Results saved to: {out}")
     print()
     print("Summary:")
-    print(f"  GSM8K Accuracy:    {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['total']} samples)")
+    print(f"  GSM8K Accuracy:    {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['total']} samples) [acc_numeric]")
     print(f"  HumanEval Pass@1:  {results['humaneval']['pass@1']:.4f} ({results['humaneval']['total']} samples)")
-    print(f"  FinQA Accuracy:    {results['finqa']['accuracy']:.4f} ({results['finqa']['total']} samples)")
-    print(f"  FinQA EM (legacy): {results['finqa']['em']:.4f} (for comparison)")
+    print(f"  FinQA Accuracy:    {results['finqa']['accuracy']:.4f} ({results['finqa']['total']} samples) [acc_numeric_tolerant]")
+    print()
+    print("Note: GSM8K uses acc_numeric (string match), FinQA uses acc_numeric_tolerant (float + format handling)")
 
 
 if __name__ == '__main__':

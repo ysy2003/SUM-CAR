@@ -3,9 +3,9 @@
 cd "$(dirname "$0")/.."
 
 # Parse command line arguments first
-USE_COT=false
+USE_COT=true
 BASE_MODEL="meta-llama/Meta-Llama-3-8B-Instruct"
-MAX_SAMPLES=5
+MAX_SAMPLES=100
 while [[ $# -gt 0 ]]; do
     case $1 in
         --use_cot)
@@ -42,14 +42,14 @@ if [ "$USE_COT" = true ]; then
     echo "Using Chain-of-Thought prompting"
     python baselines/eval_base_model.py \
         --base_model "$BASE_MODEL" \
-        --out baselines/llama3_8b_instruct_results_quick_cot.json \
+        --out baselines/llama3_test.json \
         --max_samples $MAX_SAMPLES \
         --use_cot
 else
     echo "Using normal prompting"
     python baselines/eval_base_model.py \
         --base_model "$BASE_MODEL" \
-        --out baselines/llama3_8b_instruct_results_quick.json \
+        --out baselines/llama3_test.json \
         --max_samples $MAX_SAMPLES
 fi
 

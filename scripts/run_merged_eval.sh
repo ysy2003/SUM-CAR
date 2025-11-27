@@ -10,7 +10,7 @@ echo ""
 cd "$(dirname "$0")/.."
 
 # Parse command line arguments
-USE_COT=false
+USE_COT=true
 MERGED_DIR="out/merged"
 MAX_SAMPLES=""
 while [[ $# -gt 0 ]]; do
@@ -49,19 +49,19 @@ if [ "$USE_COT" = true ]; then
     OUT_FILE="${MERGED_DIR##*/}_results_cot.json"
     if [ -n "$MAX_SAMPLES" ]; then
         python scripts/eval_merged.py \
-            --base_model gpt2 \
+            --base_model meta-llama/Meta-Llama-3-8B-Instruct \
             --merged_dir "$MERGED_DIR" \
-            --out "baselines/$OUT_FILE" \
-            --k_top 4 \
+            --out "scripts/$OUT_FILE" \
+            --k_top 8 \
             --alpha 1.0 \
             --max_samples "$MAX_SAMPLES" \
             --use_cot
     else
         python scripts/eval_merged.py \
-            --base_model gpt2 \
+            --base_model meta-llama/Meta-Llama-3-8B-Instruct \
             --merged_dir "$MERGED_DIR" \
-            --out "baselines/$OUT_FILE" \
-            --k_top 4 \
+            --out "scripts/$OUT_FILE" \
+            --k_top 8 \
             --alpha 1.0 \
             --max_samples 99999 \
             --use_cot
@@ -71,18 +71,18 @@ else
     OUT_FILE="${MERGED_DIR##*/}_results.json"
     if [ -n "$MAX_SAMPLES" ]; then
         python scripts/eval_merged.py \
-            --base_model gpt2 \
+            --base_model meta-llama/Meta-Llama-3-8B-Instruct \
             --merged_dir "$MERGED_DIR" \
-            --out "baselines/$OUT_FILE" \
-            --k_top 4 \
+            --out "scripts/$OUT_FILE" \
+            --k_top 8 \
             --alpha 1.0 \
             --max_samples "$MAX_SAMPLES"
     else
         python scripts/eval_merged.py \
-            --base_model gpt2 \
+            --base_model meta-llama/Meta-Llama-3-8B-Instruct \
             --merged_dir "$MERGED_DIR" \
-            --out "baselines/$OUT_FILE" \
-            --k_top 4 \
+            --out "scripts/$OUT_FILE" \
+            --k_top 8 \
             --alpha 1.0 \
             --max_samples 99999
     fi

@@ -3,7 +3,7 @@
 cd "$(dirname "$0")/.."
 
 # Parse command line arguments first
-USE_COT=false
+USE_COT=true
 BASE_MODEL="meta-llama/Meta-Llama-3-8B-Instruct"
 while [[ $# -gt 0 ]]; do
     case $1 in

@@ -4,14 +4,17 @@
 
 set -e
 
+# Set PYTHONPATH so Python can find the sumcar module
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+
 echo "=== SUM-CAR Patch Merging ==="
 echo "Tasks: Math (GSM8K), Code (CodeXGLUE), FinQA"
 echo ""
 
 # 检查 patch 文件是否存在
-MATH_PATCH="out/math/patch_gsm8k.json"
+MATH_PATCH="out/math_cot/patch_gsm8k.json"
 CODE_PATCH="out/code/patch_codexglue.json"
-FINQA_PATCH="out/finqa/patch_finqa.json"
+FINQA_PATCH="out/finqa_cot/patch_finqa.json"
 
 echo "Checking patch files..."
 missing=0
@@ -49,9 +52,9 @@ echo "Merging patches with TF-IDF scoring..."
 echo "========================================="
 
 # 合并参数
-BASE_MODEL="gpt2"
+BASE_MODEL="meta-llama/Meta-Llama-3-8B-Instruct"
 NUM_SLOTS=8192      # 初始槽位数（会根据需要自动扩展）
-K_TOP=4             # 每次检索 top-k 个槽位
+K_TOP=8             # 每次检索 top-k 个槽位 (match training config)
 ALPHA=1.0           # 记忆贡献的缩放因子
 OUT_DIR="out/merged"
 
