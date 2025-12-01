@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from scripts.build_composite_finqa import build_composite_finqa_dev
 from src.sumcar.eval.eval_composite_finqa import evaluate as run_eval
 
-def evaluate_composite_finqa(model, tokenizer, device, ground_truth_file, generations_file):
+def evaluate_composite_finqa(model, tokenizer, device, ground_truth_file, generations_file, log_skipped_records=False, max_samples=None):
     """
     Orchestrates the composite FinQA evaluation.
     """
@@ -29,25 +29,76 @@ def evaluate_composite_finqa(model, tokenizer, device, ground_truth_file, genera
         if 'gold' in sample and 'gold_answer' not in sample:
             sample['gold_answer'] = sample['gold']
 
-    # Filter out invalid gold answers
+    # Enhanced cleaning and validation for gold answers with debug output
+    def clean_gold_answer(gold_answer):
+        if isinstance(gold_answer, str):
+            # Convert 'yes' and 'no' to numeric values
+            if gold_answer.lower() == 'yes':
+                return 1.0
+            elif gold_answer.lower() == 'no':
+                return 0.0
+
+            # Handle percentage values
+            if gold_answer.endswith('%'):
+                try:
+                    return float(gold_answer.strip('%')) / 100
+                except ValueError:
+                    return None
+
+            # Handle semicolon-separated values
+            if ';' in gold_answer:
+                gold_answer = gold_answer.split(';')[0].strip()  # Take the first value
+
+            # Remove other unwanted characters
+            gold_answer = gold_answer.replace('$', '').replace('million', '000000').replace('thousand', '000')
+
+            # Handle multiple values (e.g., "$ 386797190 or $ 386.8 million")
+            if 'or' in gold_answer:
+                gold_answer = gold_answer.split('or')[0].strip()
+
+            # Extract numeric part
+            gold_answer = ''.join(filter(lambda x: x.isdigit() or x == '.' or x == '-', gold_answer))
+
+        try:
+            # Convert to float if possible
+            return float(gold_answer)
+        except ValueError:
+            return None
+
     valid_dataset = []
+    invalid_records = []  # Collect invalid records for debugging
     for sample in dataset:
         gold_answer = sample.get('gold_answer', None)
         if gold_answer is not None:
-            try:
-                # Attempt to parse gold_answer as a number or valid string
-                float(gold_answer.strip('%')) if isinstance(gold_answer, str) else gold_answer
+            cleaned_gold = clean_gold_answer(gold_answer)
+            if cleaned_gold is not None:
+                sample['gold_answer'] = cleaned_gold  # Update with cleaned value
                 valid_dataset.append(sample)
-            except ValueError:
-                print(f"Skipping invalid gold answer: {gold_answer} in sample ID {sample['id']}")
+            else:
+                invalid_records.append({"id": sample['id'], "gold_answer": gold_answer})
         else:
-            print(f"Missing gold answer in sample ID {sample['id']}")
+            invalid_records.append({"id": sample['id'], "gold_answer": "MISSING"})
+
+    # Print all invalid records for debugging if log_skipped_records is True
+    if log_skipped_records:
+        print("Invalid gold answers:")
+        for record in invalid_records:
+            print(record)
 
     dataset = valid_dataset
+
+    # Limit the dataset if max_samples is specified
+    print(f"Original dataset size: {len(dataset)}")
+    if max_samples is not None:
+        dataset = dataset[:max_samples]
+        print(f"Dataset size after applying max_samples: {len(dataset)}")
+
+    # Update dataset_by_id to reflect the limited dataset
     dataset_by_id = {sample['id']: sample for sample in dataset}
 
-    # 2. Generate responses from model, with resume capability
+    # Initialize existing_generations before using it
     existing_generations = {}
+
     if Path(generations_file).exists():
         with open(generations_file, 'r') as f:
             for line in f:
@@ -59,8 +110,13 @@ def evaluate_composite_finqa(model, tokenizer, device, ground_truth_file, genera
                     print(f"Warning: Could not decode line in {generations_file}: {line.strip()}")
         print(f"Loaded {len(existing_generations)} existing generations from {generations_file}.")
 
+    # Ensure samples_to_generate_ids is based on the limited dataset
     samples_to_generate_ids = [sample_id for sample_id in dataset_by_id if sample_id not in existing_generations]
-    
+
+    # Debugging: Print the number of samples to generate
+    print(f"Samples to generate after applying max_samples: {len(samples_to_generate_ids)}")
+
+    # 2. Generate responses from model, with resume capability
     if not samples_to_generate_ids:
         print("All generations already exist. Skipping generation.")
     else:
@@ -119,8 +175,10 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name_or_path", default="gpt2", help="Model to evaluate")
-    parser.add_argument("--ground_truth_file", default="out/finqa/finqa_composite_dev.jsonl")
+    parser.add_argument("--ground_truth_file", default="out/finqa/finqa_composite_dev_cleaned.jsonl")
     parser.add_argument("--generations_file", default="out/finqa/generations.jsonl")
+    parser.add_argument("--log_skipped_records", action="store_true", help="Log details of skipped records")
+    parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of samples to process")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -137,5 +195,7 @@ if __name__ == '__main__':
         tokenizer, 
         device,
         args.ground_truth_file, 
-        args.generations_file
+        args.generations_file,
+        log_skipped_records=args.log_skipped_records,
+        max_samples=args.max_samples
     )
