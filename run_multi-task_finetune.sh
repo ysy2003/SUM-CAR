@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Generate composite dataset
-python scripts/prepare_composite.py --out composite_dataset.json --max_samples 100
+# Generate multi-task dataset
+python scripts/prepare_multi_task.py --out out/multi_task/multi_task_dataset.json --max_samples 100
 
 # Run fine-tuning
 python scripts/multi-task_finetune.py \
-    --data_file composite_dataset.json \
+    --data_file out/multi_task/multi_task_dataset.json \
     --base_model gpt2 \
     --output_dir finetuned_model \
     --epochs 3 \
