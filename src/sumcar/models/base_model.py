@@ -26,16 +26,10 @@ class MemoryAugmentedCausalLM(nn.Module):
         inputs_embeds = self.embed(input_ids)
         aug = self.mem(inputs_embeds)
         inputs_embeds = inputs_embeds + aug
-        
-        # When using inputs_embeds, transformers' generate doesn't include input_ids in output
-        # We need to manually concatenate them
+
+        # Generate with inputs_embeds
+        # For Llama models, this INCLUDES input tokens in output
         generated_ids = self.lm.generate(inputs_embeds=inputs_embeds, attention_mask=attention_mask, **gen_kw)
-        
-        # Check if input_ids are already in generated_ids (some models behave differently)
-        if generated_ids.shape[1] >= input_ids.shape[1]:
-            # Likely already includes input - check first few tokens
-            if torch.equal(generated_ids[0, :min(3, input_ids.shape[1])], input_ids[0, :min(3, input_ids.shape[1])]):
-                return generated_ids
-        
-        # Concatenate input_ids with generated_ids
-        return torch.cat([input_ids, generated_ids], dim=1)
+
+        # Always return as-is (input already included by Llama)
+        return generated_ids

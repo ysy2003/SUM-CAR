@@ -1,0 +1,33 @@
+base_model: Qwen/Qwen3-8B
+mem:
+  num_slots: 4096
+  k_top: 8
+  alpha: 1.0
+  tau: 10.0
+  use_gate: false
+  normalize_retrieval: true
+  track_hits: false
+  hits_source: "none"
+train:
+  epochs: 3
+  lr: 5.0e-4
+  lr_kv: 1.0e-3
+  lr_gate: 1.0e-4
+  batch_size: 2
+  max_length: 384  # CoT需要更长的序列
+  probe_steps: 200
+  top_t: 512
+  refresh_every: 100
+  save_dir: out_qwen3/finqa_cot
+  patch_output_dir: out_qwen3          # Separate patch output directory
+  checkpoint_base_dir: out_qwen3_ckpt  # Separate checkpoint directory (patches/, merges/, runs/)
+  seed: 42
+  dataset: finqa_rc
+  max_examples: null  # null = use full dataset
+  use_cot: true  # 启用Chain-of-Thought
+  use_lora: true  # 启用LoRA
+  lora_config:
+    r: 8  # LoRA rank
+    lora_alpha: 16  # LoRA scaling factor
+    target_modules: ["q_proj", "v_proj"]  # Apply LoRA to attention Q and V projections
+    lora_dropout: 0.05

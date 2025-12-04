@@ -3,14 +3,10 @@ from datasets import load_dataset
 
 
 # 原始prompt（直接给答案）
-_DEF_PROMPT = "Solve the problem and give only the final numeric answer.\n\n{q}\n\nAnswer:"
+_DEF_PROMPT = "Question: {q}\n\nProvide your final numeric answer in the last sentence."
 
 # CoT prompt（让模型生成推理过程）
-_COT_PROMPT = """Let's solve this step by step.
-
-Question: {q}
-
-Let me think through this carefully:"""
+_COT_PROMPT = "Question: {q}\n\nThink step by step, then provide your final numeric answer in the last sentence."
 
 
 def _last_number(s: str):

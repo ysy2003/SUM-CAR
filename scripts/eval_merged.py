@@ -15,7 +15,6 @@ from src.sumcar.memory.kv_memory import KVMemoryLayer
 from src.sumcar.models.base_model import MemoryAugmentedCausalLM
 from src.sumcar.eval.metrics import acc_numeric, acc_numeric_tolerant, em
 from src.sumcar.utils.sandbox import safe_exec
-from src.sumcar.data.code_codexglue import load as load_codexglue
 
 
 def extract_code_from_markdown(text: str) -> str:
@@ -116,6 +115,78 @@ def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
 
 
 @torch.no_grad()
+def eval_humaneval(model, tokenizer, max_samples=20):
+    """Quick eval on HumanEval."""
+    device = next(model.parameters()).device
+    try:
+        ds = load_dataset('openai_humaneval')['test']
+    except:
+        ds = load_dataset('nuprl/humaneval')['test']
+
+    ds = ds.select(range(min(max_samples, len(ds))))
+
+    total, correct = 0, 0
+    predictions = []
+    print(f"\n  Testing {len(ds)} HumanEval samples...")
+    for i, ex in enumerate(tqdm(ds, desc="  HumanEval", unit="sample")):
+        prompt = ex['prompt']
+
+        # Use chat template for proper formatting
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        enc = tokenizer([text], return_tensors='pt').to(device)
+
+        # High limit for code generation
+        max_tokens = 2048
+        input_length = enc['input_ids'].shape[1]
+        out_ids = model.generate(
+            **enc,
+            max_new_tokens=max_tokens,
+            do_sample=False,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id
+        )
+
+        # Decode only generated tokens (skip input)
+        if len(out_ids[0]) > input_length:
+            raw_output = tokenizer.decode(out_ids[0][input_length:], skip_special_tokens=True)
+        else:
+            raw_output = tokenizer.decode(out_ids[0], skip_special_tokens=True)
+
+        # Extract code from markdown blocks if present
+        code = extract_code_from_markdown(raw_output)
+
+        # Combine prompt (function signature) with generated code (function body)
+        executed_code = ex['prompt'] + code
+
+        test_code = ex.get('test', '')
+        res = safe_exec(executed_code + "\n\n" + test_code)
+        ok = (res.ok and 'passed' in res.stdout.lower()) or (res.ok and len(res.error)==0)
+        correct += 1 if ok else 0
+        total += 1
+
+        predictions.append({
+            'prompt': ex['prompt'],
+            'raw_output': raw_output,
+            'extracted_code': code,
+            'executed_code': executed_code,
+            'passed': bool(ok),
+            'error': res.error if not ok else None
+        })
+
+    return {
+        'pass@1': correct/total,
+        'total': total,
+        'correct': correct,
+        'predictions': predictions
+    }
+
+
+@torch.no_grad()
 def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
     """
     Quick eval on FinQA.
@@ -200,65 +271,6 @@ def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
     }
 
 
-@torch.no_grad()
-def eval_codexglue(model, tokenizer, max_samples=20):
-    """Quick eval on CodeXGLUE."""
-    device = next(model.parameters()).device
-    ds = load_codexglue(split='test')
-    ds = ds.select(range(min(max_samples, len(ds))))
-
-    total, correct = 0, 0
-    predictions = []
-    print(f"\n  Testing {len(ds)} CodeXGLUE samples...")
-    for i, ex in enumerate(tqdm(ds, desc="  CodeXGLUE", unit="sample")):
-        prompt = ex['prompt']
-
-        # Use chat template for proper formatting
-        messages = [{"role": "user", "content": prompt}]
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-        enc = tokenizer([text], return_tensors='pt').to(device)
-
-        # High limit for code generation
-        max_tokens = 2048
-        input_length = enc['input_ids'].shape[1]
-        out_ids = model.generate(
-            **enc,
-            max_new_tokens=max_tokens,
-            do_sample=False,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.pad_token_id
-        )
-
-        # Decode only generated tokens (skip input)
-        if len(out_ids[0]) > input_length:
-            pred = tokenizer.decode(out_ids[0][input_length:], skip_special_tokens=True)
-        else:
-            pred = tokenizer.decode(out_ids[0], skip_special_tokens=True)
-
-        gold = ex['fixed']
-        is_correct = (pred.strip() == gold.strip())
-        correct += is_correct
-        total += 1
-
-        predictions.append({
-            'prompt': ex['prompt'],
-            'prediction': pred,
-            'gold': gold,
-            'correct': bool(is_correct)
-        })
-
-    return {
-        'accuracy': correct/total,
-        'total': total,
-        'correct': correct,
-        'predictions': predictions
-    }
-
-
 def main(base_model='gpt2',
          merged_dir='out/merged',
          out='scripts/merged_model_results_quick.json',
@@ -291,8 +303,6 @@ def main(base_model='gpt2',
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-    # # Set default chat template for tokenizer
-    # tokenizer.chat_template = "{role}: {content}\n"
     model.eval()
     print("✓ Model loaded")
     
@@ -307,6 +317,13 @@ def main(base_model='gpt2',
     print(f"  Accuracy: {results['gsm8k']['accuracy']:.4f}")
 
     print("\n" + "="*50)
+    print("HumanEval (Code)")
+    print("="*50)
+    results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
+    print(f"\n  Result: {results['humaneval']['correct']}/{results['humaneval']['total']} passed")
+    print(f"  Pass@1: {results['humaneval']['pass@1']:.4f}")
+
+    print("\n" + "="*50)
     print("FinQA (Finance)")
     print("="*50)
     results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
@@ -314,13 +331,6 @@ def main(base_model='gpt2',
     print(f"  Accuracy: {results['finqa']['accuracy']:.4f}")
     if results['finqa']['skipped'] > 0:
         print(f"  Skipped: {results['finqa']['skipped']}")
-
-    print("\n" + "="*50)
-    print("CodeXGLUE (Code Repair)")
-    print("="*50)
-    results['codexglue'] = eval_codexglue(model, tokenizer, max_samples)
-    print(f"\n  Result: {results['codexglue']['correct']}/{results['codexglue']['total']} correct")
-    print(f"  Accuracy: {results['codexglue']['accuracy']:.4f}")
 
     # Save
     results['config'] = {'use_cot': use_cot, 'k_top': k_top, 'alpha': alpha, 'gsm8k_eval_method': 'acc_numeric', 'finqa_eval_method': 'acc_numeric_tolerant'}
@@ -332,6 +342,7 @@ def main(base_model='gpt2',
     print("Summary")
     print("="*50)
     print(f"GSM8K:     {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['correct']}/{results['gsm8k']['total']}) [acc_numeric]")
+    print(f"HumanEval: {results['humaneval']['pass@1']:.4f} ({results['humaneval']['correct']}/{results['humaneval']['total']})")
     print(f"FinQA:     {results['finqa']['accuracy']:.4f} ({results['finqa']['correct']}/{results['finqa']['total']}) [acc_numeric_tolerant]")
     print()
     print("Note: GSM8K uses acc_numeric (string match), FinQA uses acc_numeric_tolerant (float + format handling)")

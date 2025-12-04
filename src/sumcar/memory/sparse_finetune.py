@@ -198,7 +198,11 @@ class SparseFinetuner:
         
         # Loss历史记录
         loss_history = []
-        
+
+        # Best checkpoint tracking
+        best_loss = float('inf')
+        best_mem_state = None
+
         step = 0
         for ep in range(epochs):
             epoch_pbar = tqdm(dl, desc=f"Epoch {ep+1}/{epochs}", unit="batch")
@@ -207,14 +211,26 @@ class SparseFinetuner:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
                 loss = out.loss
-                
+
                 # 记录loss
                 loss_history.append({
                     'step': step,
                     'epoch': ep + 1,
                     'loss': loss.item()
                 })
-                
+
+                # Track best checkpoint (save memory state)
+                if loss.item() < best_loss:
+                    best_loss = loss.item()
+                    # Deep copy memory state (keys and values)
+                    best_mem_state = {
+                        'keys': self.mem.keys.detach().clone().cpu(),
+                        'values': self.mem.vals.detach().clone().cpu(),
+                        'step': step,
+                        'epoch': ep + 1,
+                        'loss': loss.item()
+                    }
+
                 loss.backward()
                 
                 # 稀疏梯度 mask
@@ -259,9 +275,17 @@ class SparseFinetuner:
                     top_slots = self.spec_tracker.top_t(top_t).to(device)
                     self.mem.set_trainable_slots(top_slots.tolist())
                     self.logger.log(f'[step {step}] refresh Top-t={len(top_slots)}; loss={loss.item():.4f}')
-            
+
             self.logger.log(f'Epoch {ep + 1}/{epochs} done')
-        
+
+        # Restore best checkpoint
+        if best_mem_state is not None:
+            self.logger.log(f'Restoring best checkpoint from step {best_mem_state["step"]} (epoch {best_mem_state["epoch"]}) with loss {best_mem_state["loss"]:.4f}')
+            self.mem.keys.data = best_mem_state['keys'].to(device)
+            self.mem.vals.data = best_mem_state['values'].to(device)
+        else:
+            self.logger.log('Warning: No best checkpoint found, using final state')
+
         return loss_history
     
     def build_patch(self, task: str, top_t: int, out_dir: str, train_stats: Dict = None, use_ckpt_manager: bool = True, loss_history: list = None) -> Dict:

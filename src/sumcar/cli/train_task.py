@@ -108,13 +108,15 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
     ft = SparseFinetuner(base_model, mem_cfg, train_cfg, tokenizer=tok, logger=logger, use_xla=use_xla)
     
     # 创建 checkpoint 管理器
+    # 使用可配置的 checkpoint 基础目录（默认为当前目录）
+    ckpt_base_dir = train_cfg.get('checkpoint_base_dir', '.')
     ckpt_manager = CheckpointManager(
-        base_dir=".",  # 当前目录
+        base_dir=ckpt_base_dir,
         task=task,
         base_model_id=base_model
     )
     ft.ckpt_manager = ckpt_manager  # 注入到 finetuner
-    logger.log(f'Checkpoint dirs created: runs/{task}/ckpts, patches/, merges/')
+    logger.log(f'Checkpoint dirs created: {ckpt_base_dir}/runs/{task}/ckpts, {ckpt_base_dir}/patches/, {ckpt_base_dir}/merges/')
 
     # 4) Phase I: probe slot access (all frozen, just logging)
     ft.mem.freeze_all()
@@ -182,14 +184,17 @@ def main(task: str = None, config: str = None, config_path: str = None, use_xla:
     # 7) Export patch (传入loss历史)
     save_dir = train_cfg['save_dir']
     patch = ft.build_patch(task, top_t, save_dir, train_stats, loss_history=loss_history)
-    ensure_dir('out')
-    
+
+    # 使用可配置的输出目录（默认为 'out'）
+    patch_output_dir = train_cfg.get('patch_output_dir', 'out')
+    ensure_dir(patch_output_dir)
+
     # 保存patch和meta
-    patch_path = os.path.join('out', f'patch_{task}.json')
-    meta_path = os.path.join('out', f'patch_{task}_meta.json')
+    patch_path = os.path.join(patch_output_dir, f'patch_{task}.json')
+    meta_path = os.path.join(patch_output_dir, f'patch_{task}_meta.json')
     dump_json(patch, patch_path)
     dump_json(train_stats, meta_path)
-    logger.log('patch saved to out/', f'patch_{task}.json')
+    logger.log(f'patch saved to {patch_output_dir}/', f'patch_{task}.json')
     
     # 保存训练日志到文件
     log_dir = os.path.join(save_dir, task)

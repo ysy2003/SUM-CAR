@@ -10,17 +10,10 @@ import urllib.request
 _SPLIT_MAP = {"train": "train", "dev": "dev", "test": "test"}
 
 # 原始prompt
-_DEF_INST = "Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
+_DEF_INST = "Context:\n{ctx}\n\nQuestion: {q}\n\nProvide your final numeric answer in the last sentence."
 
 # CoT prompt
-_COT_INST = """Answer the question using ONLY the given context. Think step by step.
-
-Context:
-{ctx}
-
-Question: {q}
-
-Let me analyze this step by step:"""
+_COT_INST = "Context:\n{ctx}\n\nQuestion: {q}\n\nThink step by step, then provide your final numeric answer in the last sentence."
 
 def _table_to_tsv(table_2d):
     """Convert 2D table (List[List[str]]) to TSV format"""
