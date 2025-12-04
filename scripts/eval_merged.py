@@ -62,7 +62,7 @@ def load_merged_model(base_model, merged_dir, k_top=8, alpha=1.0, use_fp16=True)
 
 
 @torch.no_grad()
-def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
+def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0, checkpoint_callback=None):
     """Quick eval on GSM8K."""
     device = next(model.parameters()).device
     ds = load_dataset('gsm8k', 'main')['test']
@@ -116,6 +116,15 @@ def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
             'correct': bool(is_correct)
         })
 
+        # Save checkpoint if requested
+        if checkpoint_at > 0 and total == checkpoint_at and checkpoint_callback:
+            checkpoint_callback('gsm8k', {
+                'accuracy': correct/total,
+                'total': total,
+                'correct': correct,
+                'predictions': predictions.copy()
+            })
+
     return {
         'accuracy': correct/total,
         'total': total,
@@ -125,7 +134,7 @@ def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False):
 
 
 @torch.no_grad()
-def eval_humaneval(model, tokenizer, max_samples=20):
+def eval_humaneval(model, tokenizer, max_samples=20, checkpoint_at=0, checkpoint_callback=None):
     """Quick eval on HumanEval."""
     device = next(model.parameters()).device
     try:
@@ -188,6 +197,15 @@ def eval_humaneval(model, tokenizer, max_samples=20):
             'error': res.error if not ok else None
         })
 
+        # Save checkpoint if requested
+        if checkpoint_at > 0 and total == checkpoint_at and checkpoint_callback:
+            checkpoint_callback('humaneval', {
+                'pass@1': correct/total,
+                'total': total,
+                'correct': correct,
+                'predictions': predictions.copy()
+            })
+
     return {
         'pass@1': correct/total,
         'total': total,
@@ -197,7 +215,7 @@ def eval_humaneval(model, tokenizer, max_samples=20):
 
 
 @torch.no_grad()
-def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
+def eval_finqa(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0, checkpoint_callback=None):
     """
     Quick eval on FinQA.
     Uses acc_numeric_tolerant (handles financial formats, percentages, precision).
@@ -268,6 +286,16 @@ def eval_finqa(model, tokenizer, max_samples=20, use_cot=False):
                 'gold': gold,
                 'correct': bool(is_correct)
             })
+
+            # Save checkpoint if requested
+            if checkpoint_at > 0 and total == checkpoint_at and checkpoint_callback:
+                checkpoint_callback('finqa', {
+                    'accuracy': correct/total,
+                    'total': total,
+                    'correct': correct,
+                    'skipped': skipped,
+                    'predictions': predictions.copy()
+                })
         except Exception as e:
             print(f"\n  [ERROR] Exception on sample {i}: {str(e)}")
             skipped += 1
@@ -288,7 +316,8 @@ def main(base_model='gpt2',
          alpha=1.0,
          max_samples=20,
          use_cot=False,
-         use_fp16=True):
+         use_fp16=True,
+         checkpoint_at=0):
     """
     Quick evaluation of merged model.
 
@@ -301,14 +330,17 @@ def main(base_model='gpt2',
         max_samples: Samples per task (default: 20)
         use_cot: Use Chain-of-Thought prompting (default: False)
         use_fp16: Use FP16 precision (default: True)
+        checkpoint_at: Save checkpoint after N samples per task (0 = no checkpoint)
     """
     print(f"=== Quick Evaluation: Merged Model ===")
     print(f"Base model: {base_model}")
     print(f"Merged dir: {merged_dir}")
     print(f"k_top: {k_top}, alpha: {alpha}")
     print(f"Max samples per task: {max_samples}")
+    if checkpoint_at > 0:
+        print(f"Checkpoint at: {checkpoint_at} samples per task")
     print()
-    
+
     # Load model
     print("Loading merged model...")
     model = load_merged_model(base_model, merged_dir, k_top=k_top, alpha=alpha, use_fp16=use_fp16)
@@ -316,29 +348,52 @@ def main(base_model='gpt2',
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.eval()
-    print("✓ Model loaded")
-    
+    print("+ Model loaded")
+
+    # Checkpoint storage
+    checkpoint_results = {}
+
+    def save_checkpoint(task_name, task_results):
+        """Callback to save checkpoint when reached."""
+        checkpoint_results[task_name] = task_results
+        # Check if all tasks have checkpoint data
+        if len(checkpoint_results) == 3:  # gsm8k, humaneval, finqa
+            checkpoint_file = out.replace('.json', f'_checkpoint_{checkpoint_at}.json')
+            checkpoint_data = {
+                'gsm8k': checkpoint_results.get('gsm8k', {}),
+                'humaneval': checkpoint_results.get('humaneval', {}),
+                'finqa': checkpoint_results.get('finqa', {}),
+                'config': {'use_cot': use_cot, 'k_top': k_top, 'alpha': alpha, 'checkpoint_at': checkpoint_at}
+            }
+            os.makedirs(os.path.dirname(checkpoint_file) or '.', exist_ok=True)
+            with open(checkpoint_file, 'w') as f:
+                json.dump(checkpoint_data, f, indent=2)
+            print(f"\n  + Checkpoint saved to: {checkpoint_file}")
+
     # Evaluate
     results = {}
-    
+
     print("\n" + "="*50)
     print("GSM8K (Math)")
     print("="*50)
-    results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot)
+    results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot,
+                                   checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint)
     print(f"\n  Result: {results['gsm8k']['correct']}/{results['gsm8k']['total']} correct")
     print(f"  Accuracy: {results['gsm8k']['accuracy']:.4f}")
 
     print("\n" + "="*50)
     print("HumanEval (Code)")
     print("="*50)
-    results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
+    results['humaneval'] = eval_humaneval(model, tokenizer, max_samples,
+                                           checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint)
     print(f"\n  Result: {results['humaneval']['correct']}/{results['humaneval']['total']} passed")
     print(f"  Pass@1: {results['humaneval']['pass@1']:.4f}")
 
     print("\n" + "="*50)
     print("FinQA (Finance)")
     print("="*50)
-    results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
+    results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot,
+                                   checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint)
     print(f"\n  Result: {results['finqa']['correct']}/{results['finqa']['total']} correct")
     print(f"  Accuracy: {results['finqa']['accuracy']:.4f}")
     if results['finqa']['skipped'] > 0:
