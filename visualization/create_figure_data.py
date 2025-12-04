@@ -156,20 +156,21 @@ def create_remap_events_csv(remap_path, patches_dir, output_path):
 
 
 if __name__ == "__main__":
-    # Define paths
-    LOGS_DIR = "logs"
-    BASELINES_DIR = "baselines"
+    # Define absolute output paths
+    OUT_ROOT = "/Users/syy/Desktop/out"
+    LOGS_DIR = os.path.join(OUT_ROOT, "logs")
+    BASELINES_DIR = os.path.join(OUT_ROOT, "baselines")
     PATCHES_DIR = "patches"
-    MERGED_DIR = "out/merged"
+    MERGED_DIR = os.path.join(OUT_ROOT, "merged")
 
     # Ensure logs directory exists
     os.makedirs(LOGS_DIR, exist_ok=True)
 
     # --- Create scores.csv ---
-    base_results = os.path.join(BASELINES_DIR, "base_model_results_quick.json")
-    merged_results = os.path.join(BASELINES_DIR, "llama3_8b_results_quick_cot.json")
-    scores_csv_path = os.path.join(LOGS_DIR, "scores.csv")
-    create_scores_csv(base_results, merged_results, scores_csv_path)
+    # base_results = os.path.join(BASELINES_DIR, "base_model_results_quick.json")
+    # merged_results = os.path.join(BASELINES_DIR, "llama3_8b_results_quick_cot.json")
+    # scores_csv_path = os.path.join(LOGS_DIR, "scores.csv")
+    # create_scores_csv(base_results, merged_results, scores_csv_path)
 
     # --- Create memory_hits.csv ---
     memory_hits_csv_path = os.path.join(LOGS_DIR, "memory_hits.csv")

@@ -30,9 +30,9 @@ from matplotlib import patches, path as mpath
 TASK_ORDER = ["humaneval", "gsm8k", "finqa"]
 # 用于图表标题的美化名称
 TASK_DISPLAY_NAMES = {
-    "humaneval": "CodeXGLUE",
-    "gsm8k": "GSM8K",
-    "finqa": "FinQA"
+    "humaneval": "code",
+    "gsm8k": "math",
+    "finqa": "finance"
 }
 
 def ensure_dir(p):
@@ -49,10 +49,10 @@ def plot_memory_heatmaps(hits_csv, out_file, num_slots=4096, slot_bins=256):
         if sub.empty:
             display_name = TASK_DISPLAY_NAMES.get(task, task.capitalize())
             ax.imshow(np.zeros((1, slot_bins)), aspect="auto", origin="lower", cmap='viridis')
-            ax.set_title(f"{display_name} (no data)")
-            ax.set_xlabel("slot index (binned)")
+            ax.set_title(f"{display_name} (no data)", fontsize=18, fontweight="bold")
+            ax.set_xlabel("slot index (binned)", fontsize=15, fontweight="bold")
             if ax is axes[0]:
-                ax.set_ylabel("batch id")
+                ax.set_ylabel("batch id", fontsize=15, fontweight="bold")
             continue
 
         sub["slot_bin"] = pd.cut(sub["slot_id"], bins=slot_bins, labels=False, right=False)
@@ -66,17 +66,17 @@ def plot_memory_heatmaps(hits_csv, out_file, num_slots=4096, slot_bins=256):
             mm = mm / mm.max()
         ax.imshow(mm, aspect="auto", origin="lower", cmap='viridis')
         display_name = TASK_DISPLAY_NAMES.get(task, task.capitalize())
-        ax.set_title(f"{display_name}")
-        ax.set_xlabel("slot index (binned)")
+        ax.set_title(f"{display_name}", fontsize=18, fontweight="bold")
+        ax.set_xlabel("slot index (binned)", fontsize=15, fontweight="bold")
         if ax is axes[0]:
-            ax.set_ylabel("batch id")
+            ax.set_ylabel("batch id", fontsize=15, fontweight="bold")
 
-    fig.suptitle("Memory Access Heatmaps per Task")
+    fig.suptitle("Memory Access Heatmaps per Task", fontsize=22, fontweight="bold")
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(out_file)
     plt.close(fig)
 
-def plot_remap_sankey(remap_csv, out_file, top_flows=30):
+def plot_remap_sankey(remap_csv, out_file, top_flows=50):
     """
     简洁实现，聚合后画 top flows
     """
@@ -102,12 +102,20 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=30):
     fig, ax = plt.subplots(figsize=(10, 8))
     tasks = sorted(df["task_from"].unique())
     n_tasks = len(tasks)
-    colors = plt.cm.get_cmap("tab10", n_tasks)
+    # 使用更柔和的Set2配色方案
+    colors = plt.cm.get_cmap("Set2", n_tasks)
     task_colors = {task: colors(i) for i, task in enumerate(tasks)}
 
     # 准备节点
-    left_keys = sorted(df.apply(lambda r: (r['task_from'], r['slot_old']), axis=1).unique())
-    right_keys = sorted(df['slot_new'].unique())
+    # 计算每个任务slot_old和slot_new的最小值，实现相对编号
+    slot_old_min = df.groupby('task_from')['slot_old'].transform('min')
+    slot_new_min = df.groupby('task_to')['slot_new'].transform('min')
+    df = df.copy()
+    df['slot_old_rel'] = df['slot_old'] - slot_old_min
+    df['slot_new_rel'] = df['slot_new'] - slot_new_min
+
+    left_keys = sorted(df.apply(lambda r: (r['task_from'], r['slot_old_rel']), axis=1).unique())
+    right_keys = sorted(df.apply(lambda r: (r['task_to'], r['slot_new_rel']), axis=1).unique())
     n_left, n_right = len(left_keys), len(right_keys)
 
     # 节点位置
@@ -120,8 +128,8 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=30):
     min_lw, max_lw = 1, 10 # 最小和最大线宽
 
     for _, r in df.iterrows():
-        key_left = (r['task_from'], r['slot_old'])
-        key_right = r['slot_new']
+        key_left = (r['task_from'], r['slot_old_rel'])
+        key_right = (r['task_to'], r['slot_new_rel'])
         x1, y1 = pos_left[key_left]
         x2, y2 = pos_right[key_right]
         
@@ -144,32 +152,32 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=30):
 
     # 绘制节点标签
     for k, (x, y) in pos_left.items():
-        task, slot = k
-        display_name = TASK_DISPLAY_NAMES.get(task, task)
-        ax.text(x - 0.01, y, f"{display_name}:{slot}", ha="right", va="center", fontsize=8, color=task_colors.get(task, 'black'))
+        _, slot = k
+        ax.text(x - 0.01, y, f"{slot}", ha="right", va="center", fontsize=8)
 
     for k, (x, y) in pos_right.items():
-        ax.text(x + 0.01, y, f"{k}", ha="left", va="center", fontsize=8)
+        _, slot = k
+        ax.text(x + 0.01, y, f"{slot}", ha="left", va="center", fontsize=8)
 
     # 任务区块标注
     if n_left > 0: # Only draw if there are nodes
-        task_regions = df.groupby('task_from').apply(lambda g: sorted([pos_left[(r['task_from'], r['slot_old'])][1] for _, r in g.iterrows()]))
+        task_regions = df.groupby('task_from').apply(lambda g: sorted([pos_left[(r['task_from'], r['slot_old_rel'])][1] for _, r in g.iterrows()]))
         for task, y_vals in task_regions.items():
             if not y_vals: continue
             min_y, max_y = min(y_vals), max(y_vals)
             height = (max_y - min_y) + (1/n_left)
             center_y = min_y + height/2 - (0.5/n_left)
             ax.add_patch(plt.Rectangle((-0.25, min_y - (0.5/n_left)), 0.2, height, facecolor=task_colors.get(task, 'gray'), alpha=0.6))
-            ax.text(-0.125, center_y, TASK_DISPLAY_NAMES.get(task, task), ha="center", va="center", color="white", weight="bold", fontsize=9)
+            ax.text(-0.125, center_y, TASK_DISPLAY_NAMES.get(task, task), ha="center", va="center", color="white", weight="bold", fontsize=12)
 
     # 增加左右列的标题
-    ax.text(0, 1.02, "Source Slots (Task:Slot)", transform=ax.transAxes, ha="center", fontsize=10, weight="bold")
-    ax.text(1, 1.02, "Target Slots", transform=ax.transAxes, ha="center", fontsize=10, weight="bold")
+    ax.text(0, 1.02, "Source Slots (Task:Slot)", transform=ax.transAxes, ha="center", fontsize=13, weight="bold")
+    ax.text(1, 1.02, "Target Slots", transform=ax.transAxes, ha="center", fontsize=13, weight="bold")
 
     ax.set_xlim(-0.3, 1.3)
     ax.set_ylim(-0.05, 1.05)
     ax.axis("off")
-    ax.set_title(f"Top {top_flows} Slot Remapping Flows by Weight", pad=20)
+    ax.set_title(f"Top {top_flows} Slot Remapping Flows by Weight", pad=20, fontsize=16, fontweight="bold")
     plt.savefig(out_file, bbox_inches="tight")
     plt.close(fig)
 
@@ -246,7 +254,7 @@ if __name__ == "__main__":
     ap.add_argument("--scores_csv", required=True)
     ap.add_argument("--num_slots", type=int, default=4096)
     ap.add_argument("--slot_bins", type=int, default=256)
-    ap.add_argument("--top_flows", type=int, default=30)
+    ap.add_argument("--top_flows", type=int, default=50)
     ap.add_argument("--outdir", default="figs")
     args = ap.parse_args()
 
