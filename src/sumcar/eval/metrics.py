@@ -16,6 +16,15 @@ def acc_numeric(pred: str, gold: str) -> float:
     return 1.0 if (pn is not None and gn is not None and pn == gn) else 0.0
 
 
+def acc_numeric_tolerant(pred: str, gold: str) -> float:
+    try:
+        pred_num = float(last_number(pred))
+        gold_num = float(last_number(gold))
+        return 1.0 if math.isclose(pred_num, gold_num, rel_tol=1e-2) else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
 # EM/F1 for FinQA RC (string-level; for numbers use numeric equality where possible)
 
 

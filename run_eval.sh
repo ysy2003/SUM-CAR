@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "=== SUM-CAR Evaluation ==="
-echo "Tasks: GSM8K (Math), HumanEval (Code), FinQA"
+echo "Tasks: GSM8K (Math), CodeXGLUE (Code Repair), FinQA"
 echo ""
 
 # Check if merged model exists
@@ -24,13 +24,14 @@ echo "Log will be saved to out/eval.log"
 echo ""
 
 # Run evaluation with log
-python -m sumcar.cli.eval_single \
+python scripts/eval_merged.py \
     --base_model gpt2 \
-    --merged out/merged \
+    --merged_dir out/merged \
     --out out/eval_results.json \
-    --max_new_tokens 128 \
+    --max_samples 20 \
     --k_top 4 \
     --alpha 1.0 \
+    --use_cot False \
     2>&1 | tee out/eval.log
 
 echo ""
