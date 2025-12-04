@@ -22,10 +22,10 @@ echo "=== Starting Multi-Task Fine-Tuning ==="
 python scripts/multi-task_finetune.py \
     --data_file out/multi_task/multi_task_dataset.json \
     --base_model meta-llama/Meta-Llama-3-8B-Instruct \
-    --output_dir finetuned_model \
+    --output_dir multi-task/finetuned_model_CoT \
     --epochs 3 \
     --batch_size 4 \
     --gradient_accumulation_steps 2 \
     --lr 5e-5
 echo ""
-echo "✓ Fine-tuning completed. Model saved to: finetuned_model/"
+echo "✓ Fine-tuning completed. Model saved to: multi-task/finetuned_model_CoT/"

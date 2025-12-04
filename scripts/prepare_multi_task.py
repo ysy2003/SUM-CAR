@@ -13,7 +13,7 @@ def load_gsm8k(max_samples):
     return [
         {
             'id': f'gsm8k:{i}',
-            'prompt': f"Question: {ex['question']}\n\nAnswer:",
+            'prompt': f"Question: {ex['question']}\n\nThink step by step, then provide your final numeric answer in the last sentence.",
             'gold_numbers': [],
             'tests': ''
         }
@@ -36,8 +36,8 @@ def load_codexglue(max_samples):
 
 # Function to load FinQA samples
 def load_finqa(max_samples):
-    """Load FinQA samples."""
-    ds = finqa_rc.load(split='train', use_cot=False)
+    """Load FinQA samples with CoT prompts."""
+    ds = finqa_rc.load(split='train', use_cot=True)  # Enable CoT
     samples = []
     for i, ex in enumerate(ds):
         if i >= max_samples:
@@ -64,7 +64,7 @@ def calculate_max_samples_with_ratio(ratio_math, ratio_code, ratio_finance):
     # Get actual dataset sizes
     gsm8k_size = len(load_dataset('gsm8k', 'main', split='train'))
     codex_size = len(load_dataset('code_x_glue_cc_code_refinement', 'small', split='train'))
-    finqa_size = len(finqa_rc.load(split='train', use_cot=False))
+    finqa_size = len(finqa_rc.load(split='train', use_cot=True))  # Use CoT for consistency
 
     print(f'Available dataset sizes:')
     print(f'  GSM8K: {gsm8k_size}')

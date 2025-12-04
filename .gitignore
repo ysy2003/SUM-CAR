@@ -109,6 +109,10 @@ out_qwen3_ckpt/
 
 # Ignore finetuned models (multi-task baseline)
 finetuned_model/
+multi-task/
+
+# Ignore evaluation results
+eval/
 
 # Also ignore all files under patches/ folder
 patches/

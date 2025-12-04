@@ -33,11 +33,14 @@ def extract_code_from_markdown(text: str) -> str:
 
 
 @torch.no_grad()
-def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
+def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False, start_idx=0):
     """Evaluate on GSM8K math problems."""
     ds = load_dataset('gsm8k', 'main')['test']
     if max_samples:
-        ds = ds.select(range(min(max_samples, len(ds))))
+        end_idx = min(start_idx + max_samples, len(ds))
+        ds = ds.select(range(start_idx, end_idx))
+    elif start_idx > 0:
+        ds = ds.select(range(start_idx, len(ds)))
 
     device = next(model.parameters()).device
     total, correct = 0, 0
@@ -97,7 +100,7 @@ def eval_gsm8k(model, tokenizer, max_samples=None, use_cot=False):
 
 
 @torch.no_grad()
-def eval_humaneval(model, tokenizer, max_samples=None):
+def eval_humaneval(model, tokenizer, max_samples=None, start_idx=0):
     """Evaluate on HumanEval code generation."""
     try:
         ds = load_dataset('openai_humaneval')['test']
@@ -105,7 +108,10 @@ def eval_humaneval(model, tokenizer, max_samples=None):
         ds = load_dataset('nuprl/humaneval')['test']
 
     if max_samples:
-        ds = ds.select(range(min(max_samples, len(ds))))
+        end_idx = min(start_idx + max_samples, len(ds))
+        ds = ds.select(range(start_idx, end_idx))
+    elif start_idx > 0:
+        ds = ds.select(range(start_idx, len(ds)))
 
     device = next(model.parameters()).device
     total, correct = 0, 0
@@ -164,7 +170,7 @@ def eval_humaneval(model, tokenizer, max_samples=None):
 
 
 @torch.no_grad()
-def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
+def eval_finqa(model, tokenizer, max_samples=None, use_cot=False, start_idx=0):
     """
     Evaluate on FinQA financial QA.
     Uses acc_numeric_tolerant (handles financial formats, percentages, precision).
@@ -173,10 +179,16 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
     ds = load_finqa(split='dev', use_rc_filter=False)
 
     if max_samples:
+        end_idx = min(start_idx + max_samples, len(ds))
         if hasattr(ds, 'select'):
-            ds = ds.select(range(min(max_samples, len(ds))))
+            ds = ds.select(range(start_idx, end_idx))
         else:
-            ds = ds[:max_samples]
+            ds = ds[start_idx:end_idx]
+    elif start_idx > 0:
+        if hasattr(ds, 'select'):
+            ds = ds.select(range(start_idx, len(ds)))
+        else:
+            ds = ds[start_idx:]
 
     device = next(model.parameters()).device
     total, correct = 0, 0
@@ -251,7 +263,9 @@ def eval_finqa(model, tokenizer, max_samples=None, use_cot=False):
 def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
          out='baselines/base_model_results.json',
          max_samples=None,
-         use_cot=False):
+         use_cot=True,
+         use_fp16=True,
+         save_intermediate=False):
     """
     Evaluate base language model on three tasks.
 
@@ -259,7 +273,9 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
         base_model: Model name (default: meta-llama/Meta-Llama-3-8B-Instruct)
         out: Output JSON file path (base name, will append _gsm8k.json, _humaneval.json, _finqa.json)
         max_samples: Maximum samples per task (None = use all)
-        use_cot: Use Chain-of-Thought prompting (default: False)
+        use_cot: Use Chain-of-Thought prompting (default: True)
+        use_fp16: Use FP16 precision (default: True)
+        save_intermediate: Save results after first 100 samples (default: False)
     """
     # Silence transformers warnings
     import warnings
@@ -271,40 +287,147 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
     print("Loading model...")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
-    model = AutoModelForCausalLM.from_pretrained(base_model)
+
+    # Load with FP16 if requested
+    torch_dtype = torch.float16 if use_fp16 else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model,
+        torch_dtype=torch_dtype,
+        device_map='auto'
+    )
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = model.to(device)
     model.eval()
+
+    precision = "FP16" if use_fp16 else "FP32"
+    print(f"✓ Model loaded with {precision} precision")
     print()
 
     # Prepare output file path
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
 
-    # Evaluate on three tasks
-    results = {}
+    # If save_intermediate is True, first evaluate on 100 samples, then continue from 101
+    if save_intermediate and max_samples is None:
+        print("="*60)
+        print("CHECKPOINT 1: Evaluating first 100 samples per task")
+        print("="*60)
+        print()
 
-    print("Evaluating GSM8K (Math)...")
-    results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot)
-    print(f"  ✓ GSM8K Accuracy: {results['gsm8k']['accuracy']:.4f}")
-    print()
+        results_100 = {}
 
-    print("Evaluating HumanEval (Code)...")
-    results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
-    print(f"  ✓ HumanEval Pass@1: {results['humaneval']['pass@1']:.4f}")
-    print()
+        print("Evaluating GSM8K (Math) - samples 0-100...")
+        results_100['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples=100, use_cot=use_cot, start_idx=0)
+        print(f"  ✓ GSM8K Accuracy: {results_100['gsm8k']['accuracy']:.4f}")
+        print()
 
-    print("Evaluating FinQA (Finance)...")
-    results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
-    print(f"  ✓ FinQA Accuracy: {results['finqa']['accuracy']:.4f}")
-    print()
+        print("Evaluating HumanEval (Code) - samples 0-100...")
+        results_100['humaneval'] = eval_humaneval(model, tokenizer, max_samples=100, start_idx=0)
+        print(f"  ✓ HumanEval Pass@1: {results_100['humaneval']['pass@1']:.4f}")
+        print()
+
+        print("Evaluating FinQA (Finance) - samples 0-100...")
+        results_100['finqa'] = eval_finqa(model, tokenizer, max_samples=100, use_cot=use_cot, start_idx=0)
+        print(f"  ✓ FinQA Accuracy: {results_100['finqa']['accuracy']:.4f}")
+        print()
+
+        # Save checkpoint 1
+        results_100['config'] = {
+            'use_cot': use_cot,
+            'use_fp16': use_fp16,
+            'checkpoint': '100_samples',
+            'gsm8k_eval_method': 'acc_numeric',
+            'finqa_eval_method': 'acc_numeric_tolerant'
+        }
+        checkpoint_file = out.replace('.json', '_checkpoint_100.json')
+        with open(checkpoint_file, 'w') as f:
+            json.dump(results_100, f, indent=2)
+        print(f"✓ Checkpoint 1 saved to: {checkpoint_file}")
+        print()
+        print("="*60)
+        print("CHECKPOINT 2: Continuing from sample 101 to end")
+        print("="*60)
+        print()
+
+        # Now evaluate from sample 101 to end (without re-evaluating 0-100)
+        results_rest = {}
+
+        print("Evaluating GSM8K (Math) - samples 101-end...")
+        results_rest['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples=None, use_cot=use_cot, start_idx=100)
+        print(f"  ✓ GSM8K Accuracy (101-end): {results_rest['gsm8k']['accuracy']:.4f}")
+        print()
+
+        print("Evaluating HumanEval (Code) - samples 101-end...")
+        results_rest['humaneval'] = eval_humaneval(model, tokenizer, max_samples=None, start_idx=100)
+        print(f"  ✓ HumanEval Pass@1 (101-end): {results_rest['humaneval']['pass@1']:.4f}")
+        print()
+
+        print("Evaluating FinQA (Finance) - samples 101-end...")
+        results_rest['finqa'] = eval_finqa(model, tokenizer, max_samples=None, use_cot=use_cot, start_idx=100)
+        print(f"  ✓ FinQA Accuracy (101-end): {results_rest['finqa']['accuracy']:.4f}")
+        print()
+
+        # Merge results from 0-100 and 101-end
+        print("Merging results from both checkpoints...")
+        results = {}
+        for task in ['gsm8k', 'humaneval', 'finqa']:
+            # Combine predictions
+            combined_predictions = results_100[task]['predictions'] + results_rest[task]['predictions']
+            total_samples = results_100[task]['total'] + results_rest[task]['total']
+
+            # Recalculate accuracy/pass@1 from combined results
+            if task == 'gsm8k' or task == 'finqa':
+                # Count correct predictions
+                correct_count = sum(1 for p in combined_predictions if p['correct'])
+                results[task] = {
+                    'accuracy': correct_count / total_samples,
+                    'total': total_samples,
+                    'predictions': combined_predictions
+                }
+            else:  # humaneval
+                # Count passed tests
+                passed_count = sum(1 for p in combined_predictions if p['passed'])
+                results[task] = {
+                    'pass@1': passed_count / total_samples,
+                    'total': total_samples,
+                    'predictions': combined_predictions
+                }
+        print(f"  ✓ Merged results: {results['gsm8k']['total']} GSM8K, {results['humaneval']['total']} HumanEval, {results['finqa']['total']} FinQA")
+        print()
+
+    else:
+        # Evaluate on three tasks (full or limited) - original logic for non-checkpoint mode
+        results = {}
+
+        print("Evaluating GSM8K (Math)...")
+        results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot)
+        print(f"  ✓ GSM8K Accuracy: {results['gsm8k']['accuracy']:.4f}")
+        print()
+
+        print("Evaluating HumanEval (Code)...")
+        results['humaneval'] = eval_humaneval(model, tokenizer, max_samples)
+        print(f"  ✓ HumanEval Pass@1: {results['humaneval']['pass@1']:.4f}")
+        print()
+
+        print("Evaluating FinQA (Finance)...")
+        results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot)
+        print(f"  ✓ FinQA Accuracy: {results['finqa']['accuracy']:.4f}")
+        print()
 
     # Save combined results
-    results['config'] = {'use_cot': use_cot, 'gsm8k_eval_method': 'acc_numeric', 'finqa_eval_method': 'acc_numeric_tolerant'}
+    results['config'] = {
+        'use_cot': use_cot,
+        'use_fp16': use_fp16,
+        'checkpoint': 'final' if save_intermediate else 'complete',
+        'gsm8k_eval_method': 'acc_numeric',
+        'finqa_eval_method': 'acc_numeric_tolerant'
+    }
     with open(out, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"Results saved to: {out}")
+    if save_intermediate:
+        print(f"✓ Final results saved to: {out}")
+    else:
+        print(f"Results saved to: {out}")
     print()
     print("Summary:")
     print(f"  GSM8K Accuracy:    {results['gsm8k']['accuracy']:.4f} ({results['gsm8k']['total']} samples) [acc_numeric]")
