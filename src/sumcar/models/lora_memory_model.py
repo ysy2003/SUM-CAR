@@ -17,7 +17,7 @@ class LoRAMemoryAugmentedCausalLM(nn.Module):
         Input → Embeddings → Memory Augmentation → LoRA-adapted LM → Output
     """
 
-    def __init__(self, base_model_name: str, kv_memory: nn.Module, lora_config: dict = None):
+    def __init__(self, base_model_name: str, kv_memory: nn.Module, lora_config: dict = None, use_fp16: bool = False):
         """
         Args:
             base_model_name: HuggingFace model name
@@ -27,11 +27,16 @@ class LoRAMemoryAugmentedCausalLM(nn.Module):
                 - lora_alpha: scaling factor (default: 16)
                 - target_modules: modules to adapt (default: ["q_proj", "v_proj"])
                 - lora_dropout: dropout rate (default: 0.05)
+            use_fp16: Whether to use FP16 precision (default: False for FP32)
         """
         super().__init__()
 
-        # Load base model
-        self.lm = AutoModelForCausalLM.from_pretrained(base_model_name)
+        # Load base model with specified precision
+        torch_dtype = torch.float16 if use_fp16 else torch.float32
+        self.lm = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            torch_dtype=torch_dtype
+        )
 
         # Apply LoRA to base model
         if lora_config is None:

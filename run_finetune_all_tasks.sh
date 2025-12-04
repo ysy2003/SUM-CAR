@@ -16,9 +16,8 @@ echo "========================================="
 echo "Task 1/3: Training Math (GSM8K) with CoT"
 echo "========================================="
 python -m sumcar.cli.train_task \
-    --config configs/train_math_cot.yaml \
-    --use_xla False
-echo "✓ Math training completed. Outputs in: out/math_cot/"
+    --config configs/train_math_cot.yaml
+echo "✓ Math training completed. Outputs in: out_fp16/math_cot/"
 echo ""
 
 # 2. Code (CodeXGLUE)
@@ -26,9 +25,8 @@ echo "========================================="
 echo "Task 2/3: Training Code (CodeXGLUE)"
 echo "========================================="
 python -m sumcar.cli.train_task \
-    --config configs/train_code.yaml \
-    --use_xla False
-echo "✓ Code training completed. Outputs in: out/code/ and patches/code/"
+    --config configs/train_code.yaml
+echo "✓ Code training completed. Outputs in: out_fp16/code/"
 echo ""
 
 # 3. FinQA
@@ -36,24 +34,26 @@ echo "========================================="
 echo "Task 3/3: Training FinQA with CoT"
 echo "========================================="
 python -m sumcar.cli.train_task \
-    --config configs/train_finqa_cot.yaml \
-    --use_xla False
-echo "✓ FinQA training completed. Outputs in: out/finqa_cot/"
+    --config configs/train_finqa_cot.yaml
+echo "✓ FinQA training completed. Outputs in: out_fp16/finqa_cot/"
 echo ""
 
 echo "=== All Training Completed ==="
 echo ""
-echo "Results summary:"
-echo "  - Math (CoT):  out/math_cot/ (batch_size=4)"
-echo "  - Code:        out/code/ (batch_size=8)"
-echo "  - FinQA (CoT): out/finqa_cot/ (batch_size=2)"
+echo "Results summary (FP16):"
+echo "  - Math (CoT):  out_fp16/math_cot/ (batch_size=4)"
+echo "  - Code:        out_fp16/code/ (batch_size=8)"
+echo "  - FinQA (CoT): out_fp16/finqa_cot/ (batch_size=2)"
 echo ""
 echo "Check training logs:"
-echo "  - out/math_cot/math_cot/training.log"
-echo "  - out/code/code/training.log"
-echo "  - out/finqa_cot/finqa_cot/training.log"
+echo "  - out_fp16/math_cot/math_cot/training.log"
+echo "  - out_fp16/code/code/training.log"
+echo "  - out_fp16/finqa_cot/finqa_cot/training.log"
 echo ""
-echo "Check meta.json files for loss history and TF-IDF statistics:"
-echo "  - out/patch_math_cot_meta.json"
-echo "  - out/patch_code_meta.json"
-echo "  - out/patch_finqa_cot_meta.json"
+echo "Check patches and metadata:"
+echo "  - out_fp16/patch_math_cot.json"
+echo "  - out_fp16/patch_math_cot_meta.json"
+echo "  - out_fp16/patch_codexglue.json"
+echo "  - out_fp16/patch_codexglue_meta.json"
+echo "  - out_fp16/patch_finqa_cot.json"
+echo "  - out_fp16/patch_finqa_cot_meta.json"

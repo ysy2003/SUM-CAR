@@ -80,7 +80,8 @@ python -m sumcar.cli.merge_patches \
     --alpha $ALPHA \
     --use_tfidf_scoring True \
     --use_capacity_budgeting True \
-    --verbose True
+    --verbose True \
+    --use_fp16 True
 
 echo ""
 echo "========================================="

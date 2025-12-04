@@ -18,12 +18,15 @@ train:
   probe_steps: 200
   top_t: 512
   refresh_every: 100
-  save_dir: out/finqa_cot
+  save_dir: out_fp16/finqa_cot
+  patch_output_dir: out_fp16
+  checkpoint_base_dir: out_fp16
   seed: 42
   dataset: finqa_rc
   max_examples: null  # null = use full dataset
   use_cot: true  # 启用Chain-of-Thought
   use_lora: true  # 启用LoRA
+  use_fp16: true  # 启用FP16混合精度训练 (2x faster, 50% less memory)
   lora_config:
     r: 8  # LoRA rank
     lora_alpha: 16  # LoRA scaling factor

@@ -26,6 +26,7 @@ train:
   max_examples: null  # null = use full dataset
   use_cot: true  # 启用Chain-of-Thought
   use_lora: true  # 启用LoRA
+  use_fp16: true  # 启用FP16混合精度训练 (2x faster, 50% less memory)
   lora_config:
     r: 8  # LoRA rank
     lora_alpha: 16  # LoRA scaling factor

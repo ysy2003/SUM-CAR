@@ -5,9 +5,19 @@ from transformers import AutoModelForCausalLM
 
 class MemoryAugmentedCausalLM(nn.Module):
 
-    def __init__(self, base_model_name: str, kv_memory: nn.Module):
+    def __init__(self, base_model_name: str, kv_memory: nn.Module, use_fp16: bool = False):
+        """
+        Args:
+            base_model_name: HuggingFace model name
+            kv_memory: KV memory layer
+            use_fp16: Whether to use FP16 precision (default: False for FP32)
+        """
         super().__init__()
-        self.lm = AutoModelForCausalLM.from_pretrained(base_model_name)
+        torch_dtype = torch.float16 if use_fp16 else torch.float32
+        self.lm = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            torch_dtype=torch_dtype
+        )
         self.mem = kv_memory
         self.embed = self.lm.get_input_embeddings()
 

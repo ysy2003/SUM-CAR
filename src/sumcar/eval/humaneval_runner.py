@@ -7,6 +7,8 @@ import torch
 
 @torch.no_grad()
 def evaluate_humaneval_pass1(model, base_model_name: str, max_new_tokens: int=2048):
+    # Detect device from model
+    device = next(model.parameters()).device
     try:
         ds = load_dataset('openai_humaneval')['test']
     except:
@@ -16,6 +18,7 @@ def evaluate_humaneval_pass1(model, base_model_name: str, max_new_tokens: int=20
     total, correct = 0, 0
     for ex in tqdm(ds, desc="HumanEval Evaluation"):
         enc = tok(ex['prompt'], return_tensors='pt')
+        enc = {k: v.to(device) for k, v in enc.items()}
         out_ids = model.generate(enc['input_ids'], max_new_tokens=max_new_tokens, do_sample=False)
         code = tok.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
         # run provided tests

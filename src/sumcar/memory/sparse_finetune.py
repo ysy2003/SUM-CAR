@@ -1,7 +1,7 @@
 """
-稀疏微调器
-用于任务特定的记忆槽微调和 patch 生成
-支持 TPU/XLA 训练
+Sparse Finetuner
+For task-specific memory slot finetuning and patch generation
+Supports GPU/CUDA training
 """
 import math
 import os
@@ -22,36 +22,34 @@ from ..utils.checkpoint import CheckpointManager, TrainingState
 
 class SparseFinetuner:
     """
-    稀疏微调器
-    
-    功能：
-    1. 在任务数据上探测（probe）记忆槽使用情况
-    2. 选择 top-t 槽位进行微调
-    3. 导出任务特定的 patch
-    4. 支持 TPU/XLA 训练（通过 use_xla 标志）
+    Sparse Finetuner
+
+    Features:
+    1. Probe memory slot usage on task data
+    2. Select top-t slots for finetuning
+    3. Export task-specific patches
+    4. Support GPU/CUDA training
     """
-    
-    def __init__(self, base_model: str, mem_cfg: Dict, train_cfg: Dict, tokenizer=None, logger=None, use_xla: bool = False):
+
+    def __init__(self, base_model: str, mem_cfg: Dict, train_cfg: Dict, tokenizer=None, logger=None):
         """
-        参数:
-            base_model: 基础模型名称或路径
-            mem_cfg: 记忆配置字典 {'num_slots', 'k_top', 'alpha', 'tau'}
-            train_cfg: 训练配置字典 {'lr', 'use_lora', 'lora_config', ...}
-            tokenizer: 分词器（可选）
-            logger: 日志器（可选）
-            use_xla: 是否使用 XLA（TPU 训练）
+        Args:
+            base_model: Base model name or path
+            mem_cfg: Memory config dict {'num_slots', 'k_top', 'alpha', 'tau'}
+            train_cfg: Training config dict {'lr', 'use_lora', 'lora_config', ...}
+            tokenizer: Tokenizer (optional)
+            logger: Logger (optional)
         """
         self.logger = logger or Logger('[train]')
         self.tok = tokenizer or AutoTokenizer.from_pretrained(base_model)
-        self.use_xla = use_xla
 
         if self.tok.pad_token_id is None:
             self.tok.pad_token = self.tok.eos_token
 
-        # 推断模型维度
+        # Infer model dimension
         d_model = self._infer_d_model(base_model)
 
-        # 创建记忆层（增强版，带门控）
+        # Create memory layer (enhanced version with gating)
         self.mem = KVMemoryLayer(
             d_model=d_model,
             num_slots=mem_cfg['num_slots'],
@@ -65,19 +63,26 @@ class SparseFinetuner:
             track_interval=mem_cfg.get('track_interval', 200)
         )
 
-        # 创建增强模型（支持 LoRA）
+        # Create augmented model (with LoRA support and FP16)
         use_lora = train_cfg.get('use_lora', False)
+        use_fp16 = train_cfg.get('use_fp16', False)
+
+        if use_fp16:
+            self.logger.log('Using FP16 precision')
+            # Convert memory layer to FP16 to match model dtype
+            self.mem = self.mem.half()
+
         if use_lora:
             self.logger.log('Using LoRA + Memory augmented model')
             lora_config = train_cfg.get('lora_config', {})
-            self.model = LoRAMemoryAugmentedCausalLM(base_model, self.mem, lora_config)
+            self.model = LoRAMemoryAugmentedCausalLM(base_model, self.mem, lora_config, use_fp16=use_fp16)
         else:
             self.logger.log('Using standard Memory augmented model')
-            self.model = MemoryAugmentedCausalLM(base_model, self.mem)
+            self.model = MemoryAugmentedCausalLM(base_model, self.mem, use_fp16=use_fp16)
 
         self.cfg = train_cfg
 
-        # 特异度追踪器（传入任务名称）
+        # Specificity tracker (with task name)
         task_name = train_cfg.get('dataset', 'unknown')
         self.spec_tracker = SpecificityTracker(
             M=mem_cfg['num_slots'],
@@ -86,33 +91,29 @@ class SparseFinetuner:
     
     def _infer_d_model(self, base_model: str) -> int:
         """
-        推断模型的隐藏维度
-        
-        参数:
-            base_model: 模型名称或路径
-        
-        返回:
-            隐藏维度大小
+        Infer the model's hidden dimension
+
+        Args:
+            base_model: Model name or path
+
+        Returns:
+            Hidden dimension size
         """
         tmp = AutoModelForCausalLM.from_pretrained(base_model)
         return tmp.get_input_embeddings().weight.shape[1]
     
     def probe(self, dl: DataLoader, steps: int = 1000, device: str = None):
         """
-        探测阶段：收集槽位访问统计
-        
-        参数:
-            dl: 数据加载器
-            steps: 最大探测步数
-            device: 设备（默认自动选择）
+        Probe phase: Collect slot access statistics
+
+        Args:
+            dl: DataLoader
+            steps: Maximum probe steps
+            device: Device (auto-select by default)
         """
         if device is None:
-            if self.use_xla:
-                import torch_xla.core.xla_model as xm
-                device = xm.xla_device()
-            else:
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
         self.model.to(device)
         self.model.eval()
         self.mem.enable_access_logging()
@@ -123,22 +124,15 @@ class SparseFinetuner:
             for batch in dl:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
-                
-                # 更新特异度追踪（低频统计，避免 XLA OOM）
+
+                # Update specificity tracking
                 if cnt % 50 == 0:
-                    if self.use_xla:
-                        import torch_xla.core.xla_model as xm
-                        xm.mark_step()  # 结算 TPU 计算
-                    
-                    # 触发轻量级统计（仅基于 k_top，CPU 侧）
+                    # Trigger lightweight statistics (based on k_top only, CPU side)
                     self.mem.maybe_collect_hits_light()
                     hits = self.mem.pop_last_hits()
                     if hits is not None:
                         self.spec_tracker.update_from_hits(hits)
-                    
-                    if self.use_xla:
-                        xm.mark_step()  # CPU 统计不进 XLA 图
-                
+
                 cnt += 1
                 probe_pbar.update(1)
                 if cnt >= steps:
@@ -148,14 +142,14 @@ class SparseFinetuner:
         self.mem.disable_access_logging()
         total_accesses = int(self.mem.acc_counts.sum().item())
         self.logger.log(f'Probe done; counted {total_accesses} accesses')
-        
-        # 将 mem.acc_counts 同步到 spec_tracker（因为 track_hits 可能被禁用）
+
+        # Sync mem.acc_counts to spec_tracker (in case track_hits is disabled)
         if total_accesses > 0:
-            # 找出所有被访问的槽位
+            # Find all accessed slots
             accessed_slots = (self.mem.acc_counts > 0).nonzero(as_tuple=True)[0]
             if len(accessed_slots) > 0:
-                # 模拟 hits 格式：重复每个槽位ID access_count 次
-                # 但为了效率，我们直接更新 tf_counts
+                # Simulate hits format: repeat each slot ID access_count times
+                # But for efficiency, we directly update tf_counts
                 for slot_id in accessed_slots:
                     count = int(self.mem.acc_counts[slot_id].item())
                     self.spec_tracker.tf_counts[slot_id] = count
@@ -163,25 +157,21 @@ class SparseFinetuner:
     
     def train(self, dl: DataLoader, epochs: int = 1, device: str = None, refresh_every: int = 200):
         """
-        训练阶段：微调选中的槽位
-        
-        参数:
-            dl: 数据加载器
-            epochs: 训练轮数
-            device: 设备（默认自动选择）
-            refresh_every: 每隔多少步刷新 top-t 槽位
+        Training phase: Finetune selected slots
+
+        Args:
+            dl: DataLoader
+            epochs: Number of training epochs
+            device: Device (auto-select by default)
+            refresh_every: How often to refresh top-t slots
         """
         if device is None:
-            if self.use_xla:
-                import torch_xla.core.xla_model as xm
-                device = xm.xla_device()
-            else:
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
         self.model.to(device)
         self.model.train()
-        
-        # 优化器：分离 KV 参数和门控参数
+
+        # Optimizer: Separate KV parameters and gate parameters
         kv_params = [self.mem.keys, self.mem.vals]
         gate_params = list(self.mem.W_q.parameters())
         if self.mem.use_gate:
@@ -195,8 +185,8 @@ class SparseFinetuner:
         steps_per_epoch = len(dl)
         total_steps = steps_per_epoch * epochs
         sch = get_linear_schedule_with_warmup(opt, 0, total_steps)
-        
-        # Loss历史记录
+
+        # Loss history tracking
         loss_history = []
 
         # Best checkpoint tracking
@@ -212,7 +202,7 @@ class SparseFinetuner:
                 out = self.model(**batch)
                 loss = out.loss
 
-                # 记录loss
+                # Record loss
                 loss_history.append({
                     'step': step,
                     'epoch': ep + 1,
@@ -232,16 +222,12 @@ class SparseFinetuner:
                     }
 
                 loss.backward()
-                
-                # 稀疏梯度 mask
+
+                # Sparse gradient masking
                 mask_kv_grads(self.mem, device)
-                
-                # XLA 优化器步骤
-                if self.use_xla:
-                    import torch_xla.core.xla_model as xm
-                    xm.optimizer_step(opt, barrier=True)
-                else:
-                    opt.step()
+
+                # Optimizer step
+                opt.step()
                 
                 sch.step()
                 opt.zero_grad(set_to_none=True)
@@ -249,28 +235,21 @@ class SparseFinetuner:
                 # Update progress bar with current loss
                 epoch_pbar.set_postfix({"loss": f"{loss.item():.4f}", "step": step})
 
-                # 更新特异度（每 refresh_every 步统计一次）
+                # Update specificity (collect statistics every refresh_every steps)
                 if step % refresh_every == 0:
-                    if self.use_xla:
-                        import torch_xla.core.xla_model as xm
-                        xm.mark_step()  # 结算 TPU 计算
-                    
-                    # 触发轻量级统计（仅基于 k_top，CPU 侧）
+                    # Trigger lightweight statistics (based on k_top only, CPU side)
                     self.mem.maybe_collect_hits_light()
                     hits = self.mem.pop_last_hits()
                     if hits is not None:
                         self.spec_tracker.update_from_hits(hits)
                     else:
-                        # 如果 hits 不可用（track_hits=false），从 acc_counts 同步
+                        # If hits not available (track_hits=false), sync from acc_counts
                         accessed_slots = (self.mem.acc_counts > 0).nonzero(as_tuple=True)[0]
                         for slot_id in accessed_slots:
                             count = int(self.mem.acc_counts[slot_id].item())
                             self.spec_tracker.tf_counts[slot_id] = count
-                    
-                    if self.use_xla:
-                        xm.mark_step()  # CPU 统计不进 XLA 图
-                    
-                    # 刷新 top-t 可训练槽位
+
+                    # Refresh top-t trainable slots
                     top_t = self.cfg.get('top_t', 2048)
                     top_slots = self.spec_tracker.top_t(top_t).to(device)
                     self.mem.set_trainable_slots(top_slots.tolist())
@@ -287,42 +266,42 @@ class SparseFinetuner:
             self.logger.log('Warning: No best checkpoint found, using final state')
 
         return loss_history
-    
+
     def build_patch(self, task: str, top_t: int, out_dir: str, train_stats: Dict = None, use_ckpt_manager: bool = True, loss_history: list = None) -> Dict:
         """
-        构建并保存任务 patch（使用特异度分数）
-        
-        参数:
-            task: 任务名称
-            top_t: 选择的槽位数量
-            out_dir: 输出目录
-            train_stats: 训练统计信息（可选）
-            use_ckpt_manager: 是否使用新的 checkpoint 管理器
-        
-        返回:
-            patch 字典
+        Build and save task patch (using specificity scores)
+
+        Args:
+            task: Task name
+            top_t: Number of slots to select
+            out_dir: Output directory
+            train_stats: Training statistics (optional)
+            use_ckpt_manager: Whether to use new checkpoint manager
+
+        Returns:
+            Patch dictionary
         """
-        # 使用特异度追踪器选择 top-t 槽位
+        # Use specificity tracker to select top-t slots
         slot_ids = self.spec_tracker.top_t(top_t, total_tasks=1).tolist()
-        
-        # 计算 specificity 分数（TF-IDF，归一化到 [0,1]）
+
+        # Calculate specificity scores (TF-IDF, normalized to [0,1])
         specificity_all = self.spec_tracker.specificity(total_tasks=1, normalize=True)
         specificity = specificity_all[slot_ids].tolist()
-        
-        # 获取统计信息
+
+        # Get statistics
         spec_stats = self.spec_tracker.get_stats()
-        
-        # 槽位访问统计
+
+        # Slot access statistics
         access_counts = self.spec_tracker.get_access_counts()
         access_counts_list = [int(access_counts[sid]) for sid in slot_ids]
-        
-        # 获取 K/V 张量
+
+        # Get K/V tensors
         keys = self.mem.keys[slot_ids]
         values = self.mem.vals[slot_ids]
-        
-        # 如果使用新的 checkpoint 管理器
+
+        # If using new checkpoint manager
         if use_ckpt_manager and hasattr(self, 'ckpt_manager'):
-            # 记忆配置
+            # Memory configuration
             memory_config = {
                 'num_slots': self.mem.num_slots,
                 'd_model': self.mem.d_model,
@@ -331,8 +310,8 @@ class SparseFinetuner:
                 'tau': self.mem.tau,
                 'use_gate': self.mem.use_gate,
             }
-            
-            # 统计信息
+
+            # Statistics
             stats = {
                 'access_total': spec_stats['total_accesses'],
                 'unique_slots_accessed': spec_stats['unique_slots_accessed'],
@@ -349,11 +328,11 @@ class SparseFinetuner:
                     'unique_accessed': spec_stats['unique_slots_accessed'],
                     'top_t_total': sum(access_counts_list),
                 },
-                # IDF 信息（用于重现实验）
+                # IDF information (for reproducibility)
                 'idf_df_counts': self.spec_tracker.idf_df_counts,
             }
-            
-            # 使用 checkpoint 管理器保存
+
+            # Save using checkpoint manager
             self.ckpt_manager.save_patch(
                 slot_ids=slot_ids,
                 keys=keys,
@@ -364,20 +343,20 @@ class SparseFinetuner:
                 train_meta=train_stats or {},
                 stats=stats
             )
-        
-        # 同时保存旧格式（兼容性）
+
+        # Also save old format (for compatibility)
         patch = self.mem.get_patch(slot_ids)
         patch['task'] = task
         patch['specificity'] = specificity
         patch['access_counts'] = access_counts_list
-        
-        # 元信息
+
+        # Metadata
         meta = {
             'task': task,
             'top_t': top_t,
             'num_slots': self.mem.num_slots,
-            
-            # TF-IDF 统计
+
+            # TF-IDF statistics
             'specificity_stats': {
                 'max': spec_stats['spec_max'],
                 'min': spec_stats['spec_min'],
@@ -385,23 +364,23 @@ class SparseFinetuner:
                 'std': spec_stats['spec_std'],
                 'top_t_min': float(specificity_all[slot_ids].min().item()),
             },
-            
-            # 访问统计
+
+            # Access statistics
             'access_stats': {
                 'total': spec_stats['total_accesses'],
                 'max': spec_stats['max_access'],
                 'unique_accessed': spec_stats['unique_slots_accessed'],
                 'top_t_total': sum(access_counts_list),
             },
-            
-            # IDF 信息（用于重现实验）
+
+            # IDF information (for reproducibility)
             'idf_df_counts': self.spec_tracker.idf_df_counts,
         }
-        
-        # 添加loss历史
+
+        # Add loss history
         if loss_history:
             meta['loss_history'] = loss_history
-            # 计算loss统计
+            # Calculate loss statistics
             losses = [x['loss'] for x in loss_history]
             meta['loss_stats'] = {
                 'initial': losses[0] if losses else None,
@@ -410,12 +389,12 @@ class SparseFinetuner:
                 'max': max(losses) if losses else None,
                 'mean': sum(losses) / len(losses) if losses else None,
             }
-        
-        # 合并训练统计
+
+        # Merge training statistics
         if train_stats:
             meta.update(train_stats)
-        
-        # 保存旧格式
+
+        # Save old format
         ensure_dir(out_dir)
         dump_json(patch, os.path.join(out_dir, f'patch_{task}.json'))
         dump_json(meta, os.path.join(out_dir, f'patch_{task}_meta.json'))

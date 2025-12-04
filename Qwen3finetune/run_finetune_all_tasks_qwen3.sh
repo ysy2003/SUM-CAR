@@ -20,8 +20,7 @@ echo "========================================="
 echo "Task 1/3: Training Math (GSM8K) with CoT"
 echo "========================================="
 python -m sumcar.cli.train_task \
-    --config Qwen3finetune/configs/train_math_cot.yaml \
-    --use_xla False
+    --config Qwen3finetune/configs/train_math_cot.yaml
 echo "✓ Math training completed. Outputs in: out_qwen3/math_cot/"
 echo ""
 
@@ -30,8 +29,7 @@ echo "========================================="
 echo "Task 2/3: Training Code (CodeXGLUE)"
 echo "========================================="
 python -m sumcar.cli.train_task \
-    --config Qwen3finetune/configs/train_code.yaml \
-    --use_xla False
+    --config Qwen3finetune/configs/train_code.yaml
 echo "✓ Code training completed. Outputs in: out_qwen3/code/"
 echo ""
 
@@ -40,8 +38,7 @@ echo "========================================="
 echo "Task 3/3: Training FinQA with CoT"
 echo "========================================="
 python -m sumcar.cli.train_task \
-    --config Qwen3finetune/configs/train_finqa_cot.yaml \
-    --use_xla False
+    --config Qwen3finetune/configs/train_finqa_cot.yaml
 echo "✓ FinQA training completed. Outputs in: out_qwen3/finqa_cot/"
 echo ""
 

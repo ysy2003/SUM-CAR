@@ -63,10 +63,18 @@ def main(per_task: str,
     # 3) Slot growth per task
     total_slots = int(Pmeta.get('total_slots', 65536))
     slot_growth = {}
+    # Map evaluation task names to patch metadata keys
+    # Evaluation uses: gsm8k, humaneval, finqa
+    # Patches use: gsm8k, codexglue, finqa
+    task_to_patch_map = {
+        'gsm8k': 'gsm8k',
+        'humaneval': 'codexglue',  # HumanEval evaluation maps to CodeXGLUE patches
+        'finqa': 'finqa'
+    }
     for task in ['gsm8k', 'humaneval', 'finqa']:
-        tag = 'math' if task == 'gsm8k' else ('code' if task == 'humaneval' else 'finqa')
-        if tag in Pmeta:
-            slot_growth[task] = len(Pmeta[tag]['slot_ids']) / max(total_slots, 1)
+        patch_key = task_to_patch_map.get(task, task)
+        if patch_key in Pmeta:
+            slot_growth[task] = len(Pmeta[patch_key]['slot_ids']) / max(total_slots, 1)
 
     # 4) Reversibility — schema only (fill if ablation results are produced elsewhere)
     reversibility = {t: {'Delta_self': None, 'Delta_cross_max': None} for t in ['gsm8k', 'humaneval', 'finqa']}

@@ -103,6 +103,12 @@ out/patch_gsm8k.json
 out/merged/memory.pt
 # Ignore everything in out/ folder
 out/
+out_fp16/
+out_qwen3/
+out_qwen3_ckpt/
+
+# Ignore finetuned models (multi-task baseline)
+finetuned_model/
 
 # Also ignore all files under patches/ folder
 patches/

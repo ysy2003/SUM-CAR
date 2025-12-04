@@ -41,7 +41,7 @@ class SpecificityTracker:
     
     @torch.no_grad()
     def update_from_hits(self, hit_ids: torch.Tensor, chunk: int = 500_000):
-        """更新任务特定的访问频率（优化：CPU 端 bincount，避免 TPU HBM 分配）"""
+        """更新任务特定的访问频率（优化：CPU 端 bincount，避免大量内存分配）"""
         if hit_ids is None or len(hit_ids) == 0:
             return
         

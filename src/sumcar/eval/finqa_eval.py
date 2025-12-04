@@ -7,6 +7,8 @@ import torch
 
 @torch.no_grad()
 def evaluate_finqa_rc(model, base_model_name: str, split: str='validation', max_new_tokens: int=4096):
+    # Detect device from model
+    device = next(model.parameters()).device
     tok = AutoTokenizer.from_pretrained(base_model_name)
     if tok.pad_token_id is None: tok.pad_token = tok.eos_token
     # Use our custom finqa_rc loader that loads from GitHub
@@ -22,6 +24,7 @@ def evaluate_finqa_rc(model, base_model_name: str, split: str='validation', max_
         gold = ex.get('answer', '')
         prompt = f"Answer the question using ONLY the given context.\n\nContext:\n{ctx}\n\nQuestion: {q}\nAnswer:"
         enc = tok(prompt, return_tensors='pt', truncation=True, max_length=960)  # Leave room for generation
+        enc = {k: v.to(device) for k, v in enc.items()}
         try:
             out_ids = model.generate(enc['input_ids'], max_new_tokens=max_new_tokens)
             pred = tok.decode(out_ids[0][enc['input_ids'].shape[1]:], skip_special_tokens=True)
