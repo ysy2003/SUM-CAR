@@ -90,7 +90,7 @@ if [ ! -f "$MERGED_DIR/memory.pt" ]; then
         --out "$MERGED_DIR" \
         --num_slots 8192 \
         --k_top 64 \
-        --alpha 10 \
+        --alpha 1.0 \
         --use_tfidf_scoring True \
         --use_capacity_budgeting True \
         --use_fp16 False
@@ -118,7 +118,7 @@ python noLoRA/eval_math_only.py \
     --merged_dir "$MERGED_DIR" \
     --out "$OUT_FILE" \
     --k_top 64 \
-    --alpha 10 \
+    --alpha 1.0 \
     --use_fp16 False \
     --use_cot True \
     --mode "$EVAL_MODE" \

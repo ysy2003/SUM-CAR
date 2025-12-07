@@ -2,7 +2,7 @@ base_model: meta-llama/Meta-Llama-3-8B-Instruct
 mem:
   num_slots: 4096
   k_top: 64
-  alpha: 10
+  alpha: 1.0
   tau: 10.0
   use_gate: false
   normalize_retrieval: false

@@ -116,5 +116,3 @@ eval/
 
 # Also ignore all files under patches/ folder
 patches/
-
-noLoRA/
