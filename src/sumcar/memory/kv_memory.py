@@ -68,9 +68,9 @@ class KVMemoryLayer(nn.Module):
         self._step = 0
         self._last_hits_cpu = None  # Hit statistics stored on CPU
 
-        # Keys and Values
-        self.keys = nn.Parameter(torch.randn(num_slots, d_model) * 0.02)
-        self.vals = nn.Parameter(torch.zeros(num_slots, d_model))
+        # Keys and Values (initialized to scale 1.0)
+        self.keys = nn.Parameter(torch.randn(num_slots, d_model) * 1.0)
+        self.vals = nn.Parameter(torch.randn(num_slots, d_model) * 1.0)
 
         # Query projection (for better retrieval)
         self.W_q = nn.Linear(d_model, d_model, bias=False)

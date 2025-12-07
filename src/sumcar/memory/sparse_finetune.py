@@ -72,13 +72,17 @@ class SparseFinetuner:
             # Convert memory layer to FP16 to match model dtype
             self.mem = self.mem.half()
 
+        # Memory position: 'embedding' or 'middle'
+        memory_position = mem_cfg.get('memory_position', 'embedding')
+        self.logger.log(f'Memory position: {memory_position}')
+
         if use_lora:
             self.logger.log('Using LoRA + Memory augmented model')
             lora_config = train_cfg.get('lora_config', {})
             self.model = LoRAMemoryAugmentedCausalLM(base_model, self.mem, lora_config, use_fp16=use_fp16)
         else:
             self.logger.log('Using standard Memory augmented model')
-            self.model = MemoryAugmentedCausalLM(base_model, self.mem, use_fp16=use_fp16)
+            self.model = MemoryAugmentedCausalLM(base_model, self.mem, use_fp16=use_fp16, memory_position=memory_position)
 
         self.cfg = train_cfg
 
@@ -167,23 +171,26 @@ class SparseFinetuner:
         """
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
+
         self.model.to(device)
         self.model.train()
+
+        # Gradient accumulation
+        grad_accum_steps = self.cfg.get('gradient_accumulation_steps', 1)
 
         # Optimizer: Separate KV parameters and gate parameters
         kv_params = [self.mem.keys, self.mem.vals]
         gate_params = list(self.mem.W_q.parameters())
         if self.mem.use_gate:
             gate_params.extend(list(self.mem.gate.parameters()))
-        
+
         opt = torch.optim.AdamW([
             {'params': kv_params, 'lr': self.cfg.get('lr_kv', self.cfg['lr'])},
             {'params': gate_params, 'lr': self.cfg.get('lr_gate', self.cfg['lr'] * 0.1)},
         ])
-        
+
         steps_per_epoch = len(dl)
-        total_steps = steps_per_epoch * epochs
+        total_steps = (steps_per_epoch * epochs) // grad_accum_steps
         sch = get_linear_schedule_with_warmup(opt, 0, total_steps)
 
         # Loss history tracking
@@ -194,46 +201,68 @@ class SparseFinetuner:
         best_mem_state = None
 
         step = 0
+        accum_loss = 0.0
         for ep in range(epochs):
             epoch_pbar = tqdm(dl, desc=f"Epoch {ep+1}/{epochs}", unit="batch")
-            for batch in epoch_pbar:
-                step += 1
+            for batch_idx, batch in enumerate(epoch_pbar):
                 batch = {k: v.to(device) for k, v in batch.items()}
                 out = self.model(**batch)
-                loss = out.loss
-
-                # Record loss
-                loss_history.append({
-                    'step': step,
-                    'epoch': ep + 1,
-                    'loss': loss.item()
-                })
-
-                # Track best checkpoint (save memory state)
-                if loss.item() < best_loss:
-                    best_loss = loss.item()
-                    # Deep copy memory state (keys and values)
-                    best_mem_state = {
-                        'keys': self.mem.keys.detach().clone().cpu(),
-                        'values': self.mem.vals.detach().clone().cpu(),
-                        'step': step,
-                        'epoch': ep + 1,
-                        'loss': loss.item()
-                    }
+                loss = out.loss / grad_accum_steps  # Scale loss for accumulation
+                accum_loss += loss.item()
 
                 loss.backward()
 
                 # Sparse gradient masking
                 mask_kv_grads(self.mem, device)
 
-                # Optimizer step
-                opt.step()
-                
-                sch.step()
-                opt.zero_grad(set_to_none=True)
+                # Optimizer step only after accumulation
+                if (batch_idx + 1) % grad_accum_steps == 0:
+                    step += 1
 
-                # Update progress bar with current loss
-                epoch_pbar.set_postfix({"loss": f"{loss.item():.4f}", "step": step})
+                    # Compute norm of activated memory slots
+                    trainable_slots = self.mem.trainable_slots if hasattr(self.mem, 'trainable_slots') and self.mem.trainable_slots else []
+                    if trainable_slots:
+                        slot_ids = list(trainable_slots)
+                        keys_norm = self.mem.keys[slot_ids].norm().item()
+                        vals_norm = self.mem.vals[slot_ids].norm().item()
+                    else:
+                        keys_norm = self.mem.keys.norm().item()
+                        vals_norm = self.mem.vals.norm().item()
+
+                    # Record loss (accumulated)
+                    loss_history.append({
+                        'step': step,
+                        'epoch': ep + 1,
+                        'loss': accum_loss,
+                        'keys_norm': keys_norm,
+                        'vals_norm': vals_norm
+                    })
+
+                    # Track best checkpoint (save memory state)
+                    if accum_loss < best_loss:
+                        best_loss = accum_loss
+                        # Deep copy memory state (keys and values)
+                        best_mem_state = {
+                            'keys': self.mem.keys.detach().clone().cpu(),
+                            'values': self.mem.vals.detach().clone().cpu(),
+                            'step': step,
+                            'epoch': ep + 1,
+                            'loss': accum_loss
+                        }
+
+                    # Optimizer step
+                    opt.step()
+                    sch.step()
+                    opt.zero_grad(set_to_none=True)
+
+                    # Update progress bar with loss and memory norms
+                    epoch_pbar.set_postfix({
+                        "loss": f"{accum_loss:.4f}",
+                        "K_norm": f"{keys_norm:.2f}",
+                        "V_norm": f"{vals_norm:.2f}",
+                        "step": step
+                    })
+                    accum_loss = 0.0
 
                 # Update specificity (collect statistics every refresh_every steps)
                 if step % refresh_every == 0:

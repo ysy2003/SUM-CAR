@@ -309,41 +309,55 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
 
     # If save_intermediate is True, first evaluate on 100 samples, then continue from 101
     if save_intermediate and max_samples is None:
-        print("="*60)
-        print("CHECKPOINT 1: Evaluating first 100 samples per task")
-        print("="*60)
-        print()
-
-        results_100 = {}
-
-        print("Evaluating GSM8K (Math) - samples 0-100...")
-        results_100['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples=100, use_cot=use_cot, start_idx=0)
-        print(f"  ✓ GSM8K Accuracy: {results_100['gsm8k']['accuracy']:.4f}")
-        print()
-
-        print("Evaluating HumanEval (Code) - samples 0-100...")
-        results_100['humaneval'] = eval_humaneval(model, tokenizer, max_samples=100, start_idx=0)
-        print(f"  ✓ HumanEval Pass@1: {results_100['humaneval']['pass@1']:.4f}")
-        print()
-
-        print("Evaluating FinQA (Finance) - samples 0-100...")
-        results_100['finqa'] = eval_finqa(model, tokenizer, max_samples=100, use_cot=use_cot, start_idx=0)
-        print(f"  ✓ FinQA Accuracy: {results_100['finqa']['accuracy']:.4f}")
-        print()
-
-        # Save checkpoint 1
-        results_100['config'] = {
-            'use_cot': use_cot,
-            'use_fp16': use_fp16,
-            'checkpoint': '100_samples',
-            'gsm8k_eval_method': 'acc_numeric',
-            'finqa_eval_method': 'acc_numeric_tolerant'
-        }
         checkpoint_file = out.replace('.json', '_checkpoint_100.json')
-        with open(checkpoint_file, 'w') as f:
-            json.dump(results_100, f, indent=2)
-        print(f"✓ Checkpoint 1 saved to: {checkpoint_file}")
-        print()
+
+        # Check if checkpoint already exists
+        if os.path.exists(checkpoint_file):
+            print("="*60)
+            print("RESUMING: Checkpoint found, loading first 100 samples")
+            print("="*60)
+            print(f"  Loading from: {checkpoint_file}")
+            with open(checkpoint_file, 'r') as f:
+                results_100 = json.load(f)
+            print(f"  ✓ Loaded GSM8K Accuracy (0-100): {results_100['gsm8k']['accuracy']:.4f}")
+            print(f"  ✓ Loaded HumanEval Pass@1 (0-100): {results_100['humaneval']['pass@1']:.4f}")
+            print(f"  ✓ Loaded FinQA Accuracy (0-100): {results_100['finqa']['accuracy']:.4f}")
+            print()
+        else:
+            print("="*60)
+            print("CHECKPOINT 1: Evaluating first 100 samples per task")
+            print("="*60)
+            print()
+
+            results_100 = {}
+
+            print("Evaluating GSM8K (Math) - samples 0-100...")
+            results_100['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples=100, use_cot=use_cot, start_idx=0)
+            print(f"  ✓ GSM8K Accuracy: {results_100['gsm8k']['accuracy']:.4f}")
+            print()
+
+            print("Evaluating HumanEval (Code) - samples 0-100...")
+            results_100['humaneval'] = eval_humaneval(model, tokenizer, max_samples=100, start_idx=0)
+            print(f"  ✓ HumanEval Pass@1: {results_100['humaneval']['pass@1']:.4f}")
+            print()
+
+            print("Evaluating FinQA (Finance) - samples 0-100...")
+            results_100['finqa'] = eval_finqa(model, tokenizer, max_samples=100, use_cot=use_cot, start_idx=0)
+            print(f"  ✓ FinQA Accuracy: {results_100['finqa']['accuracy']:.4f}")
+            print()
+
+            # Save checkpoint 1
+            results_100['config'] = {
+                'use_cot': use_cot,
+                'use_fp16': use_fp16,
+                'checkpoint': '100_samples',
+                'gsm8k_eval_method': 'acc_numeric',
+                'finqa_eval_method': 'acc_numeric_tolerant'
+            }
+            with open(checkpoint_file, 'w') as f:
+                json.dump(results_100, f, indent=2)
+            print(f"✓ Checkpoint 1 saved to: {checkpoint_file}")
+            print()
         print("="*60)
         print("CHECKPOINT 2: Continuing from sample 101 to end")
         print("="*60)

@@ -1,0 +1,31 @@
+base_model: meta-llama/Meta-Llama-3-8B-Instruct
+mem:
+  num_slots: 4096
+  k_top: 64
+  alpha: 10
+  tau: 10.0
+  use_gate: false
+  normalize_retrieval: false
+  track_hits: false
+  hits_source: "none"
+  memory_position: middle  # 'embedding' (after embed) or 'middle' (after layer 16)
+train:
+  epochs: 1
+  lr: 5.0e-5
+  lr_kv: 1.0e-4
+  lr_gate: 1.0e-5
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_length: 1024
+  probe_steps: 0
+  top_t: 4096
+  refresh_every: 100
+  save_dir: noLoRA/math
+  patch_output_dir: noLoRA
+  checkpoint_base_dir: noLoRA
+  seed: 42
+  dataset: gsm8k
+  max_examples: null
+  use_cot: true
+  use_lora: false  # NO LoRA - only train memory layer
+  use_fp16: false  # Disabled - FP16 without GradScaler causes NaN

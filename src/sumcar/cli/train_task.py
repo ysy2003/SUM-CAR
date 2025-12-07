@@ -45,13 +45,15 @@ def dataset_to_messages(ds: Dataset) -> list:
     return messages_list
 
 
-def main(task: str = None, config: str = None, config_path: str = None):
+def main(task: str = None, config: str = None, config_path: str = None, max_examples: int = None, epochs: int = None):
     """Train a per-task sparse-memory skill patch using KV memory.
 
     Args:
         task: short name for this patch (e.g., 'math' / 'code' / 'finqa').
         config: path to YAML config (contains base_model, mem, train).
         config_path: alternative name for config parameter
+        max_examples: override max_examples from config (CLI override)
+        epochs: override epochs from config (CLI override)
     Outputs:
         out/patch_{task}.json         — serialized patch (KV memory)
         out/patch_{task}_meta.json    — metadata (task, stats)
@@ -64,6 +66,14 @@ def main(task: str = None, config: str = None, config_path: str = None):
     base_model = cfg['base_model']
     mem_cfg = cfg['mem']
     train_cfg = cfg['train']
+
+    # CLI overrides
+    if max_examples is not None:
+        train_cfg['max_examples'] = max_examples
+        print(f"[CLI override] max_examples={max_examples}")
+    if epochs is not None:
+        train_cfg['epochs'] = epochs
+        print(f"[CLI override] epochs={epochs}")
 
     # Print config to verify parameters (prevent YAML duplicate key issues)
     print(f"[cfg] num_slots={mem_cfg['num_slots']}, k_top={mem_cfg['k_top']}, "
@@ -88,9 +98,9 @@ def main(task: str = None, config: str = None, config_path: str = None):
     ds = LOADERS[ds_name]('train', use_cot=use_cot)
 
     # Limit data size (optional, for quick testing)
-    max_examples = train_cfg.get('max_examples', None)
-    if max_examples:
-        ds = ds.select(range(min(max_examples, len(ds))))
+    max_ex = train_cfg.get('max_examples', None)
+    if max_ex:
+        ds = ds.select(range(min(max_ex, len(ds))))
         logger.log(f'limited to {len(ds)} examples for testing')
 
     # ============ KV Memory training path (GPU/CUDA support) ============
@@ -118,16 +128,23 @@ def main(task: str = None, config: str = None, config_path: str = None):
     logger.log(f'Checkpoint dirs created: {ckpt_base_dir}/runs/{task}/ckpts, {ckpt_base_dir}/patches/, {ckpt_base_dir}/merges/')
 
     # 4) Phase I: probe slot access (all frozen, just logging)
-    ft.mem.freeze_all()
     probe_steps = train_cfg.get('probe_steps', 1000)
-    logger.log(f'Phase I: Probing {probe_steps} steps...')
-    ft.probe(dl, steps=probe_steps)
-
-    # 5) Phase II: choose top-t most-accessed slots, unfreeze and finetune
     top_t = train_cfg['top_t']
-    slot_ids = ft.mem.top_slots(top_t)
-    logger.log('unfreezing top-t slots:', len(slot_ids))
-    ft.mem.unfreeze_slots(slot_ids)
+
+    if probe_steps > 0:
+        ft.mem.freeze_all()
+        logger.log(f'Phase I: Probing {probe_steps} steps...')
+        ft.probe(dl, steps=probe_steps)
+
+        # 5) Phase II: choose top-t most-accessed slots, unfreeze and finetune
+        slot_ids = ft.mem.top_slots(top_t)
+        logger.log('unfreezing top-t slots:', len(slot_ids))
+        ft.mem.unfreeze_slots(slot_ids)
+    else:
+        # Skip probing, make all slots trainable
+        logger.log(f'Skipping probe phase, making all {top_t} slots trainable')
+        slot_ids = list(range(top_t))
+        ft.mem.unfreeze_slots(slot_ids)
 
     # Train with refresh_every parameter
     refresh_every = train_cfg.get('refresh_every', 200)

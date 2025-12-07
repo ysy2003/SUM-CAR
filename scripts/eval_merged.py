@@ -62,11 +62,16 @@ def load_merged_model(base_model, merged_dir, k_top=8, alpha=1.0, use_fp16=True)
 
 
 @torch.no_grad()
-def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0, checkpoint_callback=None):
+def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0, checkpoint_callback=None, skip_samples=0):
     """Quick eval on GSM8K."""
     device = next(model.parameters()).device
     ds = load_dataset('gsm8k', 'main')['test']
     ds = ds.select(range(min(max_samples, len(ds))))
+
+    # Skip samples if resuming
+    if skip_samples > 0:
+        ds = ds.select(range(skip_samples, len(ds)))
+        print(f"  Resuming from sample {skip_samples + 1}, {len(ds)} samples remaining")
 
     total, correct = 0, 0
     predictions = []
@@ -134,7 +139,7 @@ def eval_gsm8k(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0,
 
 
 @torch.no_grad()
-def eval_humaneval(model, tokenizer, max_samples=20, checkpoint_at=0, checkpoint_callback=None):
+def eval_humaneval(model, tokenizer, max_samples=20, checkpoint_at=0, checkpoint_callback=None, skip_samples=0):
     """Quick eval on HumanEval."""
     device = next(model.parameters()).device
     try:
@@ -143,6 +148,11 @@ def eval_humaneval(model, tokenizer, max_samples=20, checkpoint_at=0, checkpoint
         ds = load_dataset('nuprl/humaneval')['test']
 
     ds = ds.select(range(min(max_samples, len(ds))))
+
+    # Skip samples if resuming
+    if skip_samples > 0:
+        ds = ds.select(range(skip_samples, len(ds)))
+        print(f"  Resuming from sample {skip_samples + 1}, {len(ds)} samples remaining")
 
     total, correct = 0, 0
     predictions = []
@@ -215,7 +225,7 @@ def eval_humaneval(model, tokenizer, max_samples=20, checkpoint_at=0, checkpoint
 
 
 @torch.no_grad()
-def eval_finqa(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0, checkpoint_callback=None):
+def eval_finqa(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0, checkpoint_callback=None, skip_samples=0):
     """
     Quick eval on FinQA.
     Uses acc_numeric_tolerant (handles financial formats, percentages, precision).
@@ -228,6 +238,14 @@ def eval_finqa(model, tokenizer, max_samples=20, use_cot=False, checkpoint_at=0,
         ds = ds.select(range(min(max_samples, len(ds))))
     else:
         ds = ds[:min(max_samples, len(ds))]
+
+    # Skip samples if resuming
+    if skip_samples > 0:
+        if hasattr(ds, 'select'):
+            ds = ds.select(range(skip_samples, len(ds)))
+        else:
+            ds = ds[skip_samples:]
+        print(f"  Resuming from sample {skip_samples + 1}, {len(ds)} samples remaining")
 
     total, correct = 0, 0
     skipped = 0
@@ -317,7 +335,8 @@ def main(base_model='gpt2',
          max_samples=20,
          use_cot=False,
          use_fp16=True,
-         checkpoint_at=0):
+         checkpoint_at=0,
+         resume=False):
     """
     Quick evaluation of merged model.
 
@@ -331,6 +350,7 @@ def main(base_model='gpt2',
         use_cot: Use Chain-of-Thought prompting (default: False)
         use_fp16: Use FP16 precision (default: True)
         checkpoint_at: Save checkpoint after N samples per task (0 = no checkpoint)
+        resume: If True, resume from existing checkpoint (skip first checkpoint_at samples)
     """
     print(f"=== Quick Evaluation: Merged Model ===")
     print(f"Base model: {base_model}")
@@ -339,7 +359,22 @@ def main(base_model='gpt2',
     print(f"Max samples per task: {max_samples}")
     if checkpoint_at > 0:
         print(f"Checkpoint at: {checkpoint_at} samples per task")
+    if resume:
+        print(f"Resume mode: Will skip first {checkpoint_at} samples and load from checkpoint")
     print()
+
+    # Check for existing checkpoint if resuming
+    checkpoint_file = out.replace('.json', f'_checkpoint_{checkpoint_at}.json')
+    loaded_checkpoint = None
+    if resume and checkpoint_at > 0 and os.path.exists(checkpoint_file):
+        print(f"Loading checkpoint from: {checkpoint_file}")
+        with open(checkpoint_file, 'r') as f:
+            loaded_checkpoint = json.load(f)
+        print(f"+ Checkpoint loaded, will resume from sample {checkpoint_at + 1}")
+    elif resume:
+        print(f"Warning: Resume requested but checkpoint not found: {checkpoint_file}")
+        print("Running full evaluation instead...")
+        resume = False
 
     # Load model
     print("Loading merged model...")
@@ -372,12 +407,21 @@ def main(base_model='gpt2',
 
     # Evaluate
     results = {}
+    skip_samples = checkpoint_at if resume and loaded_checkpoint else 0
 
     print("\n" + "="*50)
     print("GSM8K (Math)")
     print("="*50)
     results['gsm8k'] = eval_gsm8k(model, tokenizer, max_samples, use_cot=use_cot,
-                                   checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint)
+                                   checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint,
+                                   skip_samples=skip_samples)
+    # Merge with checkpoint if resuming
+    if resume and loaded_checkpoint and 'gsm8k' in loaded_checkpoint:
+        ckpt = loaded_checkpoint['gsm8k']
+        results['gsm8k']['predictions'] = ckpt['predictions'] + results['gsm8k']['predictions']
+        results['gsm8k']['correct'] = ckpt['correct'] + results['gsm8k']['correct']
+        results['gsm8k']['total'] = ckpt['total'] + results['gsm8k']['total']
+        results['gsm8k']['accuracy'] = results['gsm8k']['correct'] / results['gsm8k']['total']
     print(f"\n  Result: {results['gsm8k']['correct']}/{results['gsm8k']['total']} correct")
     print(f"  Accuracy: {results['gsm8k']['accuracy']:.4f}")
 
@@ -385,7 +429,15 @@ def main(base_model='gpt2',
     print("HumanEval (Code)")
     print("="*50)
     results['humaneval'] = eval_humaneval(model, tokenizer, max_samples,
-                                           checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint)
+                                           checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint,
+                                           skip_samples=skip_samples)
+    # Merge with checkpoint if resuming
+    if resume and loaded_checkpoint and 'humaneval' in loaded_checkpoint:
+        ckpt = loaded_checkpoint['humaneval']
+        results['humaneval']['predictions'] = ckpt['predictions'] + results['humaneval']['predictions']
+        results['humaneval']['correct'] = ckpt['correct'] + results['humaneval']['correct']
+        results['humaneval']['total'] = ckpt['total'] + results['humaneval']['total']
+        results['humaneval']['pass@1'] = results['humaneval']['correct'] / results['humaneval']['total']
     print(f"\n  Result: {results['humaneval']['correct']}/{results['humaneval']['total']} passed")
     print(f"  Pass@1: {results['humaneval']['pass@1']:.4f}")
 
@@ -393,7 +445,16 @@ def main(base_model='gpt2',
     print("FinQA (Finance)")
     print("="*50)
     results['finqa'] = eval_finqa(model, tokenizer, max_samples, use_cot=use_cot,
-                                   checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint)
+                                   checkpoint_at=checkpoint_at, checkpoint_callback=save_checkpoint,
+                                   skip_samples=skip_samples)
+    # Merge with checkpoint if resuming
+    if resume and loaded_checkpoint and 'finqa' in loaded_checkpoint:
+        ckpt = loaded_checkpoint['finqa']
+        results['finqa']['predictions'] = ckpt['predictions'] + results['finqa']['predictions']
+        results['finqa']['correct'] = ckpt['correct'] + results['finqa']['correct']
+        results['finqa']['total'] = ckpt['total'] + results['finqa']['total']
+        results['finqa']['skipped'] = ckpt.get('skipped', 0) + results['finqa']['skipped']
+        results['finqa']['accuracy'] = results['finqa']['correct'] / results['finqa']['total'] if results['finqa']['total'] > 0 else 0
     print(f"\n  Result: {results['finqa']['correct']}/{results['finqa']['total']} correct")
     print(f"  Accuracy: {results['finqa']['accuracy']:.4f}")
     if results['finqa']['skipped'] > 0:
