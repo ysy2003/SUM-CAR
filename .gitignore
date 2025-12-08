@@ -116,3 +116,20 @@ eval/
 
 # Also ignore all files under patches/ folder
 patches/
+
+# JSON files (evaluation results, patches)
+*.json
+
+# noLoRA experiment outputs
+noLoRA/**/merged/
+noLoRA/**/eval/
+noLoRA/eval_full/
+noLoRA/baseline/
+noLoRA/**/*.json
+noLoRA/**/patch_*.json
+
+# Large model files
+*.bin
+*.safetensors
+model.safetensors
+pytorch_model.bin

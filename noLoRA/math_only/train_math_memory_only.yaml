@@ -20,9 +20,9 @@ train:
   probe_steps: 0
   top_t: 4096
   refresh_every: 100
-  save_dir: noLoRA/math
-  patch_output_dir: noLoRA
-  checkpoint_base_dir: noLoRA
+  save_dir: noLoRA/math_only/math
+  patch_output_dir: noLoRA/math_only
+  checkpoint_base_dir: noLoRA/math_only
   seed: 42
   dataset: gsm8k
   max_examples: null

@@ -2,8 +2,8 @@ from datasets import load_dataset
 
 
 _DEF_INST = (
-"Fix the following buggy Python code. Return ONLY the corrected code.\n\n"
-"# Buggy code:\n{buggy}\n\n# Corrected code:\n"
+"Fix the following buggy code. Return ONLY the corrected code in the same format.\n\n"
+"Buggy code:\n{buggy}\n\nCorrected code:\n"
 )
 
 

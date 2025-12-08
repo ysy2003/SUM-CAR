@@ -8,9 +8,10 @@ def load(split: str='train'):
         base = load_dataset('google-research-datasets/mbpp', 'sanitized')[split]
 
     def _map(ex):
+        spec = ex.get('prompt', ex.get('text', ''))
         prompt = (
-"Write a correct Python function that satisfies the specification.\n\n"
-f"Specification:\n{ex['text']}\n\n# Your code:\n"
+f"Write a correct Python function that satisfies the specification.\n\n"
+f"Specification:\n{spec}\n\n# Your code:\n"
 )
         return {
             'prompt': prompt,
