@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from glob import glob
-from typing import Dict, Iterable, Mapping, Optional
+from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 import torch
 from transformers import AutoTokenizer
@@ -32,9 +32,9 @@ _TASK_NORMALIZATION = {
 }
 
 _DEFAULT_PATCH_PATTERNS = {
-    "gsm8k": "patches/patch_gsm8k*.pt",
-    "humaneval": "patches/patch_codexglue*.pt",
-    "finqa": "patches/patch_finqa*.pt",
+    "gsm8k": "/content/drive/MyDrive/SUM-CAR/noLoRA/memory_math.pt",
+    "humaneval": "/content/drive/MyDrive/SUM-CAR/noLoRA/memory_code.pt",
+    "finqa": "/content/drive/MyDrive/SUM-CAR/noLoRA/merged_finqa/memory.pt",
 }
 
 
@@ -195,19 +195,88 @@ class MetricInputGenerator:
     # ------------------------------------------------------------------
     # State loading utilities
     # ------------------------------------------------------------------
+
     def _load_patch_state(self, path: str) -> dict:
+        """Load {'keys': Tensor, 'vals': Tensor} from a patch checkpoint.
+
+        支持几种常见格式：
+        1) 直接保存 (keys, vals)
+        2) dict 里有 'keys' / 'vals' 或 'values'
+        """
         data = torch.load(path, map_location="cpu")
-        vals = data.get("vals") or data.get("values")
-        if vals is None:
-            raise ValueError(f"Patch at {path} missing 'vals'/'values' tensors")
-        return {"keys": data["keys"], "vals": vals}
+
+        # 情况 1：直接存成 (keys, vals)
+        if isinstance(data, (tuple, list)) and len(data) == 2:
+            keys, vals = data
+            return {"keys": keys, "vals": vals}
+
+        # 情况 2：字典格式
+        if isinstance(data, Mapping):
+            # 先拿 keys
+            keys = None
+            if "keys" in data:
+                keys = data["keys"]
+            elif "k" in data:
+                keys = data["k"]
+
+            if keys is None:
+                raise ValueError(
+                    f"Patch {path} does not contain 'keys' or 'k' tensor; "
+                    f"available keys: {list(data.keys())}"
+                )
+
+            # 再拿 vals（注意不要用 `or`）
+            vals = None
+            if "vals" in data:
+                vals = data["vals"]
+            elif "values" in data:
+                vals = data["values"]
+            elif "v" in data:
+                vals = data["v"]
+
+            if vals is None:
+                raise ValueError(
+                    f"Patch {path} does not contain 'vals'/'values'/'v' tensor; "
+                    f"available keys: {list(data.keys())}"
+                )
+
+            return {"keys": keys, "vals": vals}
+
+        # 其他未知格式，直接报错并把类型打出来
+        raise TypeError(
+            f"Unexpected patch format in {path}: type={type(data)}, "
+            "expected (keys, vals) tuple or dict with 'keys'/'vals'."
+        )
+
+
 
     def _load_merged_state(self) -> dict:
         if self._merged_state is None:
             if not os.path.exists(self.merged_memory):
                 raise FileNotFoundError(f"Merged memory not found: {self.merged_memory}")
             data = torch.load(self.merged_memory, map_location="cpu")
-            self._merged_state = {"keys": data["keys"], "vals": data.get("vals", data.get("values"))}
+
+            if isinstance(data, Mapping) and "keys" in data:
+                keys = data["keys"]
+                vals = data.get("vals")
+                if vals is None:
+                    vals = data.get("values")
+            elif isinstance(data, (tuple, list)) and len(data) == 2:
+                keys, vals = data
+            else:
+                raise TypeError(
+                    f"Unexpected merged memory format in {self.merged_memory}: "
+                    f"type={type(data)}, keys={getattr(data, 'keys', lambda: [])()}"
+                )
+
+            if vals is None:
+                raise ValueError(
+                    f"Merged memory {self.merged_memory} does not contain 'vals' or 'values'."
+                )
+
+            self._merged_state = {"keys": keys, "vals": vals}
+
+        # 每次返回一份 clone，避免后续 inplace 修改污染缓存
         return {
             "keys": self._merged_state["keys"].clone(),
             "vals": self._merged_state["vals"].clone(),
@@ -219,32 +288,18 @@ class MetricInputGenerator:
         owner_map: Mapping[int, str],
         keep_task: str,
     ) -> dict:
+        """从 merged_state 里只保留 owner_map 标记为 keep_task 的 slots，其它位置 zero 掉。"""
         keys = state["keys"].clone()
         vals = state["vals"].clone()
+
         for idx in range(keys.shape[0]):
             if owner_map.get(idx) != keep_task:
                 keys[idx].zero_()
                 vals[idx].zero_()
+
         return {"keys": keys, "vals": vals}
 
-    def _load_owner_map(self) -> Mapping[int, str]:
-        if self._owner_map:
-            return self._owner_map
-        if not self.remap_csv or not os.path.exists(self.remap_csv):
-            return {}
-        owner_map: dict[int, str] = {}
-        with open(self.remap_csv, "r", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                try:
-                    slot_new = int(row.get("slot_new", -1))
-                except ValueError:
-                    continue
-                if slot_new < 0:
-                    continue
-                owner_map[slot_new] = row.get("task_to", "")
-        self._owner_map = owner_map
-        return owner_map
+
 
     # ------------------------------------------------------------------
     # Routing stats
