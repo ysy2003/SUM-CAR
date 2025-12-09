@@ -13,9 +13,9 @@ def load_gsm8k(max_samples):
     return [
         {
             'id': f'gsm8k:{i}',
-            'prompt': f"Question: {ex['question']}\n\nThink step by step, then provide your final numeric answer in the last sentence.",
+            'prompt': f"Question: {ex['question']}\n\nThink step by step, then provide your final numeric answer in the last sentence.\n\nAnswer: ",
             'gold_numbers': [],
-            'tests': ''
+            'tests': ex['answer']
         }
         for i, ex in enumerate(ds.select(range(actual_samples)))
     ]
@@ -44,9 +44,9 @@ def load_finqa(max_samples):
             break
         samples.append({
             'id': f'finqa:{ex["uid"]}',
-            'prompt': ex['prompt'],
+            'prompt': ex['prompt'] + "\n\nAnswer: ",
             'gold_numbers': [],
-            'tests': ''
+            'tests': str(ex['answer'])
         })
     return samples
 
