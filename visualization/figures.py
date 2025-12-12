@@ -13,22 +13,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import patches, path as mpath
 
-# ------------------------------------------------------------
-# Expected CSV schemas (minimal):
-#
-# 1) memory_hits.csv  (用于 图1：每任务的内存激活热力图)
-#    columns: task,batch_id,slot_id,weight
-#
-# 2) remap_events.csv (用于 图2：冲突与重映射 Sankey)
-#    columns: task_from,slot_old,task_to,slot_new,weight
-#
-# 3) scores.csv       (用于 图3：Retention–Forgetting 散点)
-#    columns: model,task,score_single,score_merged
-# ------------------------------------------------------------
 
-# 任务顺序和名称，需要与你的 CSV 数据中的 'task' 列完全对应
 TASK_ORDER = ["humaneval", "gsm8k", "finqa"]
-# 用于图表标题的美化名称
 TASK_DISPLAY_NAMES = {
     "humaneval": "code",
     "gsm8k": "math",
@@ -92,22 +78,19 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=50):
         plt.close(fig)
         return
 
-    # 筛选出实际发生重映射的流
     df = df[df["slot_old"] != df["slot_new"]].copy()
     if df.empty:
         print("Warning: No actual remapping events found (slot_old != slot_new). Sankey plot will be empty.")
-    # 聚合后画 top flows: 根据权重排序，只取最重要的 N 条流
+
     df = df.sort_values("weight", ascending=False).head(top_flows)
 
     fig, ax = plt.subplots(figsize=(10, 8))
     tasks = sorted(df["task_from"].unique())
     n_tasks = len(tasks)
-    # 使用更柔和的Set2配色方案
+
     colors = plt.cm.get_cmap("Set2", n_tasks)
     task_colors = {task: colors(i) for i, task in enumerate(tasks)}
 
-    # 准备节点
-    # 计算每个任务slot_old和slot_new的最小值，实现相对编号
     slot_old_min = df.groupby('task_from')['slot_old'].transform('min')
     slot_new_min = df.groupby('task_to')['slot_new'].transform('min')
     df = df.copy()
@@ -118,14 +101,12 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=50):
     right_keys = sorted(df.apply(lambda r: (r['task_to'], r['slot_new_rel']), axis=1).unique())
     n_left, n_right = len(left_keys), len(right_keys)
 
-    # 节点位置
+
     pos_left = {k: (0, (i + 0.5) / n_left) for i, k in enumerate(left_keys)}
     pos_right = {k: (1, (i + 0.5) / n_right) for i, k in enumerate(right_keys)}
 
-    # --- 绘制连接线 (flows) ---
-    # 根据权重计算线宽和透明度
     max_weight = df['weight'].max() if not df.empty else 1.0
-    min_lw, max_lw = 1, 10 # 最小和最大线宽
+    min_lw, max_lw = 1, 10 
 
     for _, r in df.iterrows():
         key_left = (r['task_from'], r['slot_old_rel'])
@@ -135,22 +116,21 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=50):
         
         weight_ratio = r['weight'] / max_weight if max_weight > 0 else 0
         lw = min_lw + (max_lw - min_lw) * weight_ratio
-        alpha = 0.5 + 0.4 * weight_ratio # 权重越大，越不透明
+        alpha = 0.5 + 0.4 * weight_ratio 
 
-        # 使用Bézier曲线绘制平滑的流
         Path = mpath.Path
         path_data = [
             (Path.MOVETO, (x1, y1)),
-            (Path.CURVE4, (x1 + 0.3, y1)), # 控制点1
-            (Path.CURVE4, (x2 - 0.3, y2)), # 控制点2
-            (Path.CURVE4, (x2, y2)),       # 结束点
+            (Path.CURVE4, (x1 + 0.3, y1)), 
+            (Path.CURVE4, (x2 - 0.3, y2)), 
+            (Path.CURVE4, (x2, y2)),      
         ]
         codes, verts = zip(*path_data)
         path = Path(verts, codes)
         patch = patches.PathPatch(path, facecolor='none', edgecolor=task_colors.get(r['task_from'], 'gray'), lw=lw, alpha=alpha)
         ax.add_patch(patch)
 
-    # 绘制节点标签
+
     for k, (x, y) in pos_left.items():
         _, slot = k
         ax.text(x - 0.01, y, f"{slot}", ha="right", va="center", fontsize=8)
@@ -159,7 +139,6 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=50):
         _, slot = k
         ax.text(x + 0.01, y, f"{slot}", ha="left", va="center", fontsize=8)
 
-    # 任务区块标注
     if n_left > 0: # Only draw if there are nodes
         task_regions = df.groupby('task_from').apply(lambda g: sorted([pos_left[(r['task_from'], r['slot_old_rel'])][1] for _, r in g.iterrows()]))
         for task, y_vals in task_regions.items():
@@ -170,7 +149,6 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=50):
             ax.add_patch(plt.Rectangle((-0.25, min_y - (0.5/n_left)), 0.2, height, facecolor=task_colors.get(task, 'gray'), alpha=0.6))
             ax.text(-0.125, center_y, TASK_DISPLAY_NAMES.get(task, task), ha="center", va="center", color="white", weight="bold", fontsize=12)
 
-    # 增加左右列的标题
     ax.text(0, 1.02, "Source Slots (Task:Slot)", transform=ax.transAxes, ha="center", fontsize=13, weight="bold")
     ax.text(1, 1.02, "Target Slots", transform=ax.transAxes, ha="center", fontsize=13, weight="bold")
 
@@ -182,9 +160,7 @@ def plot_remap_sankey(remap_csv, out_file, top_flows=50):
     plt.close(fig)
 
 def plot_retention_scatter(scores_csv, out_file):
-    """
-    y=x 参考线
-    """
+
     try:
         df = pd.read_csv(scores_csv)
         if df.empty:

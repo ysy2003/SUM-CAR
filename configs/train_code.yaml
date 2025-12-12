@@ -14,7 +14,7 @@ train:
   lr_kv: 1.0e-3
   lr_gate: 1.0e-4
   batch_size: 8
-  max_length: 128  # 代码序列较短，可以用更大batch
+  max_length: 128 
   probe_steps: 200
   top_t: 512
   refresh_every: 100
@@ -23,11 +23,6 @@ train:
   checkpoint_base_dir: out_fp16
   seed: 42
   dataset: codexglue_refine
-  max_examples: null  # null = use full dataset
-  use_lora: true  # 启用LoRA
-  use_fp16: true  # 启用FP16混合精度训练 (2x faster, 50% less memory)
-  lora_config:
-    r: 8  # LoRA rank
-    lora_alpha: 16  # LoRA scaling factor
-    target_modules: ["q_proj", "v_proj"]  # Apply LoRA to attention Q and V projections
-    lora_dropout: 0.05
+  max_examples: null 
+  use_lora: False
+  use_fp16: False

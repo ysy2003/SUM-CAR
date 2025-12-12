@@ -1,6 +1,4 @@
 #!/bin/bash
-# 运行所有任务的 finetune
-# 确保输出目录不会互相覆盖
 
 set -e
 

@@ -9,10 +9,8 @@ import urllib.request
 
 _SPLIT_MAP = {"train": "train", "dev": "dev", "test": "test"}
 
-# 原始prompt
 _DEF_INST = "Context:\n{ctx}\n\nQuestion: {q}\n\nProvide your final numeric answer in the last sentence."
 
-# CoT prompt
 _COT_INST = "Context:\n{ctx}\n\nQuestion: {q}\n\nThink step by step, then provide your final numeric answer in the last sentence."
 
 def _table_to_tsv(table_2d):
@@ -31,16 +29,14 @@ def _build_context(item: Dict) -> str:
 
 def _format_example(item: Dict, use_cot: bool = False) -> Dict:
     """Format example into prompt/target structure"""
-    # FinQA数据结构：question和answer在'qa'字段里
+
     qa = item.get("qa", {})
     ans = qa.get("answer", "") or qa.get("exe_ans", "") or ""
     q = qa.get("question", "")
     ctx = _build_context(item)
     
-    # 根据use_cot选择prompt
     if use_cot:
         prompt = _COT_INST.format(ctx=ctx, q=q)
-        # CoT模式下，可以添加推理步骤（如果有program的话）
         program = qa.get("program_re", "") or qa.get("program", "")
         if program:
             target = f"Based on the context, I need to: {program}\n\nThe answer is: {str(ans).strip()}"

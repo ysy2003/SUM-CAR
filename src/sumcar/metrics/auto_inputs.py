@@ -197,22 +197,11 @@ class MetricInputGenerator:
     # ------------------------------------------------------------------
 
     def _load_patch_state(self, path: str) -> dict:
-        """Load {'keys': Tensor, 'vals': Tensor} from a patch checkpoint.
-
-        支持几种常见格式：
-        1) 直接保存 (keys, vals)
-        2) dict 里有 'keys' / 'vals' 或 'values'
-        """
         data = torch.load(path, map_location="cpu")
-
-        # 情况 1：直接存成 (keys, vals)
         if isinstance(data, (tuple, list)) and len(data) == 2:
             keys, vals = data
             return {"keys": keys, "vals": vals}
-
-        # 情况 2：字典格式
         if isinstance(data, Mapping):
-            # 先拿 keys
             keys = None
             if "keys" in data:
                 keys = data["keys"]
@@ -225,7 +214,6 @@ class MetricInputGenerator:
                     f"available keys: {list(data.keys())}"
                 )
 
-            # 再拿 vals（注意不要用 `or`）
             vals = None
             if "vals" in data:
                 vals = data["vals"]
@@ -242,7 +230,6 @@ class MetricInputGenerator:
 
             return {"keys": keys, "vals": vals}
 
-        # 其他未知格式，直接报错并把类型打出来
         raise TypeError(
             f"Unexpected patch format in {path}: type={type(data)}, "
             "expected (keys, vals) tuple or dict with 'keys'/'vals'."
@@ -276,7 +263,6 @@ class MetricInputGenerator:
 
             self._merged_state = {"keys": keys, "vals": vals}
 
-        # 每次返回一份 clone，避免后续 inplace 修改污染缓存
         return {
             "keys": self._merged_state["keys"].clone(),
             "vals": self._merged_state["vals"].clone(),
@@ -288,7 +274,6 @@ class MetricInputGenerator:
         owner_map: Mapping[int, str],
         keep_task: str,
     ) -> dict:
-        """从 merged_state 里只保留 owner_map 标记为 keep_task 的 slots，其它位置 zero 掉。"""
         keys = state["keys"].clone()
         vals = state["vals"].clone()
 
