@@ -71,7 +71,12 @@ pip install -r requirements.txt
   --use_fp16 False --mode full --memory_position middle
 
 # Evaluation metrics
-List in runs/main_runs_2.ipynb
+runs/main_runs_2.ipynb
+runs/metrics.ipynb
+!python3 src/sumcar/metrics/toggle_math_slots_offline.py
 
 ## Multitask 
 !bash noLoRA/multi_task/run_multi_task_pipeline.sh
+
+## composite eval
+!bash runs/run_composite_eval.sh --model  noLoRA/merged_concat_3task --mode full
