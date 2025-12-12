@@ -131,7 +131,7 @@ def eval_gsm8k(model, tokenizer, max_samples=99999, use_cot=True, skip_samples=0
 def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
          merged_dir='noLoRA/math_only/merged',
          out='noLoRA/math_only/eval/math_results_cot.json',
-         k_top=8,
+         k_top=64,
          alpha=1.0,
          use_cot=True,
          use_fp16=False,

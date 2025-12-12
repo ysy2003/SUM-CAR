@@ -19,7 +19,8 @@ def evaluate_composite_finqa(model, tokenizer, device, ground_truth_file, genera
     # 1. Load or generate dataset
     if not Path(ground_truth_file).exists():
         print(f"{ground_truth_file} not found. Generating it now...")
-        build_composite_finqa_dev()
+        generated_path = build_composite_finqa_dev()
+        print(f"Generated dataset at: {generated_path}")
 
     with open(ground_truth_file, 'r') as f:
         dataset = [json.loads(line) for line in f]
@@ -130,13 +131,26 @@ def evaluate_composite_finqa(model, tokenizer, device, ground_truth_file, genera
 
                 # Define generation parameters
                 max_new_tokens = 512
-                # Some models like gpt2 have a small context window, so we need to be careful
-                model_max_length = tokenizer.model_max_length if hasattr(tokenizer, 'model_max_length') and tokenizer.model_max_length else 1024
-            
+                # Use reasonable context length (Llama-3 has 8192, but model_max_length can be huge)
+                model_max_length = min(
+                    getattr(tokenizer, 'model_max_length', 8192),
+                    8192  # Cap at 8192 for Llama-3
+                )
+
                 # Truncate prompt to leave space for new tokens
                 max_prompt_len = model_max_length - max_new_tokens
+
+                # Use chat template for instruct models
+                if hasattr(tokenizer, 'apply_chat_template') and tokenizer.chat_template:
+                    messages = [{"role": "user", "content": prompt}]
+                    formatted_prompt = tokenizer.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
+                else:
+                    formatted_prompt = prompt
+
                 inputs = tokenizer(
-                    prompt,
+                    formatted_prompt,
                     return_tensors="pt",
                     truncation=True,
                     max_length=max_prompt_len
@@ -175,15 +189,24 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name_or_path", default="gpt2", help="Model to evaluate")
-    parser.add_argument("--ground_truth_file", default="out/finqa/finqa_composite_dev_cleaned.jsonl")
-    parser.add_argument("--generations_file", default="out/finqa/generations.jsonl")
+    parser.add_argument("--ground_truth_file", default="noLoRA/composite_eval/finqa_composite_dev_cleaned.jsonl")
+    parser.add_argument("--generations_file", default="noLoRA/composite_eval/generations.jsonl")
     parser.add_argument("--log_skipped_records", action="store_true", help="Log details of skipped records")
-    parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of samples to process")
+    parser.add_argument("--mode", default="full", help="'full' or number of samples (e.g., '100')")
     args = parser.parse_args()
+
+    # Parse mode
+    if str(args.mode) == 'full':
+        max_samples = None
+    else:
+        try:
+            max_samples = int(args.mode)
+        except ValueError:
+            max_samples = None
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
-    
+
     print(f"Loading model: {args.model_name_or_path}")
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path).to(device)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
@@ -191,11 +214,11 @@ if __name__ == '__main__':
         tokenizer.pad_token = tokenizer.eos_token
 
     evaluate_composite_finqa(
-        model, 
-        tokenizer, 
+        model,
+        tokenizer,
         device,
-        args.ground_truth_file, 
+        args.ground_truth_file,
         args.generations_file,
         log_skipped_records=args.log_skipped_records,
-        max_samples=args.max_samples
+        max_samples=max_samples
     )

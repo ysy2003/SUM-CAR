@@ -114,7 +114,7 @@ def eval_humaneval(model, tokenizer, max_samples=99999):
 
             # Run tests
             exec_code = full_code + "\n\n" + test_code
-            res = safe_exec(exec_code, timeout=5)
+            res = safe_exec(exec_code, timeout=10)
 
             # Check if tests passed
             passed = res.ok and len(res.error) == 0

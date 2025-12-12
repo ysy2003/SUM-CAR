@@ -1,49 +1,76 @@
 #!/bin/bash
 
-set -e  # Exit on error
+# Multi-task fine-tuning: train on math + code + finance data
 
-# Set PYTHONPATH so Python can find the sumcar module
+set -e
+cd "$(dirname "$0")"
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 
-# Create output directory
-mkdir -p out/multi_task
+# Parse arguments
+MODE="full"
+RATIO="7:2:1"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --mode)
+            MODE="$2"
+            shift 2
+            ;;
+        --ratio)
+            RATIO="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
 
-echo "=== Preparing Multi-Task Dataset ==="
-# Generate multi-task dataset with 7:2:1 ratio (math:code:finance)
-# Uses maximum available data while maintaining the ratio
-# NOTE: This now includes answers in the 'tests' field (fixed)
-python scripts/prepare_multi_task.py --out out/multi_task/multi_task_dataset.json --ratio 7:2:1
-echo "✓ Dataset created: out/multi_task/multi_task_dataset.json"
+# Output directories
+OUTPUT_DIR="noLoRA/multi_task"
+DATASET_FILE="$OUTPUT_DIR/multi_task_dataset.json"
+MODEL_DIR="$OUTPUT_DIR/finetuned_model"
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "=============================================="
+echo "  Multi-Task Fine-Tuning"
+echo "=============================================="
+echo "Mode: $MODE"
+echo "Ratio (math:code:finance): $RATIO"
+echo "Output: $MODEL_DIR"
 echo ""
 
-echo "=== Starting Multi-Task Fine-Tuning ==="
-echo "Configuration:"
+# Prepare dataset
+echo "[1/2] Preparing Multi-Task Dataset..."
+python scripts/prepare_multi_task.py \
+    --out "$DATASET_FILE" \
+    --ratio "$RATIO" \
+    --mode "$MODE"
+echo "+ Dataset created: $DATASET_FILE"
+echo ""
+
+# Fine-tune (aligned with noLoRA config)
+echo "[2/2] Starting Fine-Tuning..."
 echo "  Model: meta-llama/Meta-Llama-3-8B-Instruct"
-echo "  Output: multi-task/finetuned_model_CoT"
-echo "  Epochs: 3"
-echo "  Batch size: 4 (gradient accumulation: 2, effective: 8)"
+echo "  Epochs: 1"
+echo "  Batch size: 1 (gradient accumulation: 8, effective: 8)"
 echo "  Learning rate: 5e-5"
-echo "  Mixed precision: FP16"
-echo "  CUDA: Auto-detected"
-echo "  CoT prompts: Yes (included in dataset)"
+echo "  Max length: 1024"
+echo "  Precision: FP32"
 echo ""
 
-# Run fine-tuning with memory-efficient settings
-# batch_size=4 + gradient_accumulation_steps=2 gives effective batch size of 8
-# fp16 reduces memory usage by ~50%
 python scripts/multi-task_finetune.py \
-    --data_file out/multi_task/multi_task_dataset.json \
+    --data_file "$DATASET_FILE" \
     --base_model meta-llama/Meta-Llama-3-8B-Instruct \
-    --output_dir multi-task/finetuned_model_CoT \
-    --epochs 3 \
-    --batch_size 4 \
-    --gradient_accumulation_steps 2 \
+    --output_dir "$MODEL_DIR" \
+    --epochs 1 \
+    --batch_size 1 \
+    --gradient_accumulation_steps 8 \
     --lr 5e-5 \
-    --use_fp16
+    --max_length 1024
 
 echo ""
-echo "✓ Fine-tuning completed. Model saved to: multi-task/finetuned_model_CoT/"
-echo ""
-echo "Next steps:"
-echo "  1. Evaluate: bash run_eval_multi_task.sh --full"
-echo "  2. Compare with baseline: cat eval/multi-task_noCoT_full.json"
+echo "=============================================="
+echo "  Fine-tuning Complete"
+echo "=============================================="
+echo "Model saved to: $MODEL_DIR"

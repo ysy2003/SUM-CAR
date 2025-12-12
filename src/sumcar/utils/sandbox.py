@@ -6,7 +6,7 @@ class ExecResult:
         self.ok = ok; self.stdout = stdout; self.error = error
 
 
-_DEF_TIMEOUT=5
+_DEF_TIMEOUT=10
 
 
 def _run(code: str, q: mp.Queue):

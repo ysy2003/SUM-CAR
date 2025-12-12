@@ -264,7 +264,7 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
          out='baselines/base_model_results.json',
          max_samples=None,
          use_cot=True,
-         use_fp16=True,
+         use_fp16=False,
          save_intermediate=False):
     """
     Evaluate base language model on three tasks.

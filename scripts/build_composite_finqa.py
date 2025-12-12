@@ -23,9 +23,9 @@ def build_composite_finqa_dev():
     Generates a composite FinQA dev set with specialized prompts for evaluating
     reasoning and code generation abilities.
     """
-    output_dir = Path('out/finqa')
+    output_dir = Path('noLoRA/composite_eval')
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / 'finqa_composite_dev.jsonl'
+    output_file = output_dir / 'finqa_composite_dev_cleaned.jsonl'
     
     # Load the FinQA dev set
     # use_cot=True gives us the pre-parsed program which is good for reference
@@ -58,6 +58,7 @@ def build_composite_finqa_dev():
             count += 1
             
     print(f"Successfully generated {count} samples to {output_file}")
+    return str(output_file)
 
 if __name__ == '__main__':
     build_composite_finqa_dev()

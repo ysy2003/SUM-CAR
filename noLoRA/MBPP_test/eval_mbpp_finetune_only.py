@@ -144,7 +144,8 @@ def eval_mbpp(model, tokenizer, max_samples=99999):
 
 def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
          merged_dir='noLoRA/code_only/merged',
-         out='noLoRA/MBPP_test/code_only_mbpp.json',
+         out='noLoRA/MBPP_test/mbpp_results.json',
+         model_name=None,
          k_top=64,
          alpha=1.0,
          use_fp16=False,
@@ -155,14 +156,41 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
 
     Args:
         base_model: Base model name
-        merged_dir: Directory with merged memory.pt
+        merged_dir: Directory with merged memory.pt (e.g., noLoRA/code_only/merged, noLoRA/math_only/acc_72%/merged)
         out: Output JSON path
+        model_name: Name for this model (e.g., 'code_only', 'math_only', 'finance_only'). Auto-detected from merged_dir if not provided.
         k_top: Top-k for memory retrieval
         alpha: Alpha parameter
         use_fp16: Use FP16 precision
         mode: Number of samples or 'full' (257 total)
         memory_position: 'embedding' or 'middle' (after layer 16)
+
+    Examples:
+        # Evaluate code_only model
+        python eval_mbpp_code_only.py --merged_dir noLoRA/code_only/merged --model_name code_only
+
+        # Evaluate math_only model
+        python eval_mbpp_code_only.py --merged_dir noLoRA/math_only/acc_72%/merged --model_name math_only
+
+        # Evaluate finance_only model
+        python eval_mbpp_code_only.py --merged_dir noLoRA/finance_only/merged --model_name finance_only
     """
+    # Auto-detect model name from merged_dir if not provided
+    if model_name is None:
+        if 'code_only' in merged_dir:
+            model_name = 'code_only'
+        elif 'math_only' in merged_dir:
+            model_name = 'math_only'
+        elif 'finance_only' in merged_dir:
+            model_name = 'finance_only'
+        else:
+            # Extract folder name as model_name
+            model_name = os.path.basename(merged_dir.rstrip('/'))
+
+    # Auto-generate output path: {model_name}_mbpp.json
+    if out == 'noLoRA/MBPP_test/mbpp_results.json':
+        out = f'noLoRA/MBPP_test/{model_name}_mbpp.json'
+
     if str(mode) == 'full':
         max_samples = 99999
     else:
@@ -172,6 +200,7 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
             max_samples = 257
 
     print(f"=== MBPP pass@1 Evaluation ===")
+    print(f"Model: {model_name}")
     print(f"Base model: {base_model}")
     print(f"Merged dir: {merged_dir}")
     print(f"k_top: {k_top}, alpha: {alpha}")
@@ -200,7 +229,9 @@ def main(base_model='meta-llama/Meta-Llama-3-8B-Instruct',
     output_data = {
         'mbpp': results,
         'config': {
+            'model_name': model_name,
             'merged_dir': merged_dir,
+            'base_model': base_model,
             'k_top': k_top,
             'alpha': alpha,
             'use_fp16': use_fp16,

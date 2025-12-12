@@ -3,6 +3,7 @@
 # 1. Baseline (Llama-3-8B-Instruct) on 3 tasks
 # 2. code_only finetuned model on 3 tasks
 # 3. math_only finetuned model on 3 tasks
+# 4. finance_only finetuned model on 3 tasks
 
 set -e
 cd "$(dirname "$0")/.."
@@ -28,7 +29,7 @@ echo "=============================================="
 echo ""
 echo "Mode: $MODE"
 echo "Tasks: GSM8K (math), FinQA (finance), HumanEval (code)"
-echo "Models: Baseline, code_only, math_only"
+echo "Models: Baseline, code_only, math_only, finance_only"
 echo ""
 
 # Create output directory
@@ -143,6 +144,45 @@ echo "+ math_only evaluation complete!"
 echo ""
 
 # =============================================
+# 4. FINANCE_ONLY (FinQA-trained memory)
+# =============================================
+echo "=============================================="
+echo "4. FINANCE_ONLY (FinQA-trained memory)"
+echo "=============================================="
+echo ""
+
+FINANCE_MERGED="noLoRA/finance_only/merged"
+
+if [ ! -f "$FINANCE_MERGED/memory.pt" ]; then
+    echo "ERROR: finance_only model not found at $FINANCE_MERGED/memory.pt"
+    exit 1
+fi
+
+echo "[1/3] finance_only on GSM8K..."
+python noLoRA/code_only/eval_gsm8k_cross.py \
+    --merged_dir "$FINANCE_MERGED" \
+    --out noLoRA/eval_full/finance_only_gsm8k.json \
+    --mode "$MODE"
+
+echo ""
+echo "[2/3] finance_only on FinQA..."
+python noLoRA/math_only/eval_finqa_cross.py \
+    --merged_dir "$FINANCE_MERGED" \
+    --out noLoRA/eval_full/finance_only_finqa.json \
+    --mode "$MODE"
+
+echo ""
+echo "[3/3] finance_only on HumanEval..."
+python noLoRA/code_only/eval_humaneval.py \
+    --merged_dir "$FINANCE_MERGED" \
+    --out noLoRA/eval_full/finance_only_humaneval.json \
+    --mode "$MODE"
+
+echo ""
+echo "+ finance_only evaluation complete!"
+echo ""
+
+# =============================================
 # SUMMARY
 # =============================================
 echo "=============================================="
@@ -165,3 +205,8 @@ echo "math_only:"
 echo "  - math_only_gsm8k.json"
 echo "  - math_only_finqa.json"
 echo "  - math_only_humaneval.json"
+echo ""
+echo "finance_only:"
+echo "  - finance_only_gsm8k.json"
+echo "  - finance_only_finqa.json"
+echo "  - finance_only_humaneval.json"

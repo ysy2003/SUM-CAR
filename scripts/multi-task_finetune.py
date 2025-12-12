@@ -17,7 +17,7 @@ class CompositeDataset(Dataset):
         return self.data[idx]
 
 # Fine-tuning function
-def fine_tune(data_file, base_model='meta-llama/Meta-Llama-3-8B-Instruct', output_dir='finetuned_model', epochs=3, batch_size=1, lr=5e-5, gradient_accumulation_steps=8, use_fp16=True):
+def fine_tune(data_file, base_model='meta-llama/Meta-Llama-3-8B-Instruct', output_dir='finetuned_model', epochs=1, batch_size=1, lr=5e-5, gradient_accumulation_steps=8, use_fp16=False, max_length=1024):
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -68,8 +68,8 @@ def fine_tune(data_file, base_model='meta-llama/Meta-Llama-3-8B-Instruct', outpu
             # Combine prompt and test for Causal LM fine-tuning
             full_texts = [p + t for p, t in zip(prompts, tests)]
 
-            # Tokenize the combined texts (with max_length to avoid warning)
-            inputs = tokenizer(full_texts, return_tensors='pt', padding=True, truncation=True, max_length=512)
+            # Tokenize the combined texts
+            inputs = tokenizer(full_texts, return_tensors='pt', padding=True, truncation=True, max_length=max_length)
 
             # Move inputs to device (model may be on multiple devices with device_map='auto')
             model_device = next(model.parameters()).device
@@ -142,12 +142,12 @@ if __name__ == "__main__":
     parser.add_argument('--data_file', required=True, help='Path to the composite dataset')
     parser.add_argument('--base_model', default='meta-llama/Meta-Llama-3-8B-Instruct', help='Base model name')
     parser.add_argument('--output_dir', default='finetuned_model', help='Directory to save the fine-tuned model')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs')
+    parser.add_argument('--epochs', type=int, default=1, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size (use small value with gradient accumulation)')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Gradient accumulation steps (effective batch size = batch_size * gradient_accumulation_steps)')
     parser.add_argument('--lr', type=float, default=5e-5, help='Learning rate')
-    parser.add_argument('--use_fp16', action='store_true', default=True, help='Use mixed precision (fp16) training')
-    parser.add_argument('--no_fp16', action='store_false', dest='use_fp16', help='Disable mixed precision training')
+    parser.add_argument('--use_fp16', action='store_true', default=False, help='Use mixed precision (fp16) training')
+    parser.add_argument('--max_length', type=int, default=1024, help='Max sequence length')
     args = parser.parse_args()
 
     fine_tune(
@@ -158,5 +158,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         lr=args.lr,
-        use_fp16=args.use_fp16
+        use_fp16=args.use_fp16,
+        max_length=args.max_length
     )

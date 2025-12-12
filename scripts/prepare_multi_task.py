@@ -20,18 +20,19 @@ def load_gsm8k(max_samples):
         for i, ex in enumerate(ds.select(range(actual_samples)))
     ]
 
-# Function to load CodeXGLUE samples
-def load_codexglue(max_samples):
-    ds = load_dataset('code_x_glue_cc_code_refinement', 'small', split='train')
+# Function to load MBPP samples (aligned with noLoRA/code_only)
+def load_mbpp(max_samples):
+    from sumcar.data import mbpp
+    ds = mbpp.load(split='train')
     actual_samples = min(max_samples, len(ds))
     return [
         {
-            'id': f'codexglue:{i}',
-            'prompt': f"Fix the following buggy Python code:\n\n{ex['buggy']}\n\nCorrected code:",
+            'id': f'mbpp:{ds[i]["task_id"]}',
+            'prompt': ds[i]['prompt'],
             'gold_numbers': [],
-            'tests': f"# Test cases for the corrected code\n{ex['fixed']}"
+            'tests': ds[i]['target']
         }
-        for i, ex in enumerate(ds.select(range(actual_samples)))
+        for i in range(actual_samples)
     ]
 
 # Function to load FinQA samples
@@ -61,19 +62,21 @@ def calculate_max_samples_with_ratio(ratio_math, ratio_code, ratio_finance):
     Returns:
         Tuple of (math_samples, code_samples, finance_samples)
     """
+    from sumcar.data import mbpp
+
     # Get actual dataset sizes
     gsm8k_size = len(load_dataset('gsm8k', 'main', split='train'))
-    codex_size = len(load_dataset('code_x_glue_cc_code_refinement', 'small', split='train'))
-    finqa_size = len(finqa_rc.load(split='train', use_cot=True))  # Use CoT for consistency
+    mbpp_size = len(mbpp.load(split='train'))
+    finqa_size = len(finqa_rc.load(split='train', use_cot=True))
 
     print(f'Available dataset sizes:')
     print(f'  GSM8K: {gsm8k_size}')
-    print(f'  CodeXGLUE: {codex_size}')
+    print(f'  MBPP: {mbpp_size}')
     print(f'  FinQA: {finqa_size}')
 
     # Calculate unit size based on each dataset being the limiting factor
     unit_from_math = gsm8k_size / ratio_math
-    unit_from_code = codex_size / ratio_code
+    unit_from_code = mbpp_size / ratio_code
     unit_from_finance = finqa_size / ratio_finance
 
     # Use the smallest unit (most limiting dataset)
@@ -89,12 +92,12 @@ def calculate_max_samples_with_ratio(ratio_math, ratio_code, ratio_finance):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True, help='Output file for the composite dataset')
-    ap.add_argument('--max_samples', type=int, default=None, help='Maximum samples per dataset (equal for all). If not specified, uses ratio-based maximum.')
-    ap.add_argument('--ratio', type=str, default='7:2:1', help='Ratio of math:code:finance (default: 7:2:1)')
+    ap.add_argument('--max_samples', type=int, default=None, help='Max samples per task (default: use all)')
+    ap.add_argument('--ratio', type=str, default=None, help='Ratio of math:code:finance (e.g., 7:2:1). If set, limits samples based on ratio.')
     args = ap.parse_args()
 
-    if args.max_samples is None:
-        # Use ratio-based maximum
+    if args.ratio is not None:
+        # Use ratio-based sampling (limited by smallest dataset)
         ratio_parts = [int(x) for x in args.ratio.split(':')]
         if len(ratio_parts) != 3:
             raise ValueError('Ratio must be in format math:code:finance (e.g., 7:2:1)')
@@ -108,24 +111,28 @@ if __name__ == '__main__':
 
         print(f'\nCalculated sample counts:')
         print(f'  Math (GSM8K): {math_count}')
-        print(f'  Code (CodeXGLUE): {code_count}')
+        print(f'  Code (MBPP): {code_count}')
         print(f'  Finance (FinQA): {finance_count}')
         print(f'  Total: {math_count + code_count + finance_count}')
-    else:
-        # Use equal samples (old behavior)
+    elif args.max_samples is not None:
+        # Use equal samples per task
         math_count = code_count = finance_count = args.max_samples
         print(f'Using equal samples: {args.max_samples} per dataset')
+    else:
+        # Default: use all samples from each dataset
+        math_count = code_count = finance_count = 999999
+        print(f'Using all available samples from each dataset')
 
     # Load datasets with calculated counts
     print(f'\nLoading datasets...')
     gsm8k_samples = load_gsm8k(math_count)
-    codexglue_samples = load_codexglue(code_count)
+    mbpp_samples = load_mbpp(code_count)
     finqa_samples = load_finqa(finance_count)
 
-    print(f'Loaded: {len(gsm8k_samples)} GSM8K, {len(codexglue_samples)} CodeXGLUE, {len(finqa_samples)} FinQA')
+    print(f'Loaded: {len(gsm8k_samples)} GSM8K, {len(mbpp_samples)} MBPP, {len(finqa_samples)} FinQA')
 
     # Combine datasets
-    composite_dataset = gsm8k_samples + codexglue_samples + finqa_samples
+    composite_dataset = gsm8k_samples + mbpp_samples + finqa_samples
 
     # Save to output file
     with open(args.out, 'w', encoding='utf-8') as f:

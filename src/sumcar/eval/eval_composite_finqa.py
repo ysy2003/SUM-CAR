@@ -102,8 +102,9 @@ def evaluate(generations_file: str, ground_truth_file: str, results_file: str):
     generation_lines = open(generations_file, 'r').readlines()
     print(f"Processing {len(generation_lines)} generated records from {generations_file}")
 
+    from tqdm import tqdm
     with open(results_file, 'w') as f_res:
-        for i, line in enumerate(generation_lines):
+        for i, line in enumerate(tqdm(generation_lines, desc="Evaluating")):
             try:
                 gen_record = json.loads(line)
             except json.JSONDecodeError:
