@@ -21,10 +21,10 @@ pip install -r requirements.txt
 # Merge patches (for example, merging FinQA, GSM8K, and Code patches)
 !PYTHONPATH=/content/drive/MyDrive/SUM-CAR/src python -m sumcar.cli.merge_patches \
   --base_model meta-llama/Meta-Llama-3-8B-Instruct \
-  --patches patch_finqa.json,patch_gsm8k.json,patch_code.json \
+  --patches patch_finqa.json,patch_gsm8k.json,patch_mbpp.json \
   --out noLoRA/merged_math_finqa_code \
   --num_slots 65536 \
-  --k_top 8 \
+  --k_top 64 \
   --alpha 1.0 \
   --use_tfidf_scoring True \
   --use_capacity_budgeting True \
@@ -39,19 +39,16 @@ pip install -r requirements.txt
   --base_model meta-llama/Meta-Llama-3-8B-Instruct \
   --merged_dir merged_selection_3task \
   --out noLoRA/eval/merged_selection_3task_code_eval.json \
-  --k_top 8 --alpha 1.0 --use_cot True \
+  --k_top 64 --alpha 1.0 \
   --use_fp16 False --mode full --memory_position middle
 
 # Code (MBPP) task evaluation
-%cd /content/drive/MyDrive/SUM-CAR
-
-!PYTHONPATH=/content/drive/MyDrive/SUM-CAR \
-  python noLoRA/eval_mbpp_finetune_only.py \
-      --merged_dir noLoRA/merged_selection_3task \
-      --base_model meta-llama/Meta-Llama-3-8B-Instruct \
-      --out noLoRA/eval/merged_selection_mbpp.json \
-      --k_top 64 --alpha 1.0 \
-      --use_fp16 False --memory_position middle
+!python /content/drive/MyDrive/SUM-CAR/noLoRA/eval_mbpp_finetune_only.py \
+  --base_model meta-llama/Meta-Llama-3-8B-Instruct \
+  --merged_dir noLoRA/merged_selection_3task \
+  --out noLoRA/eval/merged_selection_3task_mbpp_eval.json \
+  --k_top 64 --alpha 1.0 \
+  --use_fp16 False --memory_position middle
 
 # FinQA task evaluation
 !python /content/drive/MyDrive/SUM-CAR/noLoRA/eval_finqa_only.py \
@@ -70,12 +67,17 @@ pip install -r requirements.txt
   --k_top 64 --alpha 1.0 --use_cot True \
   --use_fp16 False --mode full --memory_position middle
 
+## Full Evaluation (all models on all tasks)
+# Evaluates baseline(Meta-Llama-3-8B-Instruct), code_only, math_only, finance_only on GSM8K, FinQA, HumanEval
+!bash noLoRA/run_all_eval.sh --mode full
+
+
 # Evaluation metrics
 runs/main_runs_2.ipynb
 runs/metrics.ipynb
 !python3 src/sumcar/metrics/toggle_math_slots_offline.py
 
-## Multitask 
+## Multitask
 !bash noLoRA/multi_task/run_multi_task_pipeline.sh
 
 ## composite eval
