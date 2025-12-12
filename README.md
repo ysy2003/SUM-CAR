@@ -1,5 +1,26 @@
 # SUM-CAR
 
+***Can we merge multiple specialized adapters into a single model without catastrophic forgetting, joint retraining, or training new fusion controllers?***
+***Yes!***
+
+## Supported Tasks
+
+| Task | Dataset | Train | Test | Metric |
+|------|---------|-------|------|--------|
+| Math | GSM8K | 7,473 | 1,319 | Exact match |
+| Code | MBPP / HumanEval | 120 | 257 / 164 | Pass@1 |
+| Finance | FinQA | 6,251 | 883 (dev) | Numeric tolerance |
+
+## Pipeline
+
+```
+Train Patches → Merge → Evaluate
+     ↓              ↓         ↓
+patch_gsm8k.json    →    memory.pt    →    results.json
+patch_mbpp.json
+patch_finqa.json
+```
+
 ## Quickstart
 ```bash
 python -m venv .venv && source .venv/bin/activate
